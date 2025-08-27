@@ -1,6 +1,7 @@
 ---
 - name: Sync Zabbix template IDs back into NetBox custom object
   hosts: localhost
+  connection: local
   gather_facts: false
 
   vars:
