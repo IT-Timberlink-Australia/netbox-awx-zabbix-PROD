@@ -11,7 +11,7 @@
     zabbix_api_token: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
 
     # NetBox Custom Object collection path (NetBox 4.3.x “Custom Objects” plugin)
-    nb_collection_url: "{{ netbox_api_url }}/plugins/custom-objects/zabbix-template-list/"
+    nb_collection_url: "{{ (netbox_api_url | trim | regex_replace('/+$','')) ~ '/api/plugins/custom-objects/zabbix-template-list/' }}"
     page_size: 200
 
     # Flip to false if you ever want a dry-run that does no PATCH
@@ -29,6 +29,11 @@
         validate_certs: false
       register: nb_page
       failed_when: nb_page.status not in [200]
+
+    - name: Fail if NetBox returned HTML (likely login page)
+      fail:
+        msg: "NetBox returned HTML (login). Your URL must be the API path: /api/plugins/custom-objects/…"
+      when: nb_page.content_type is defined and (nb_page.content_type | lower) is search('text/html')
 
     - name: Collect NetBox rows
       set_fact:
