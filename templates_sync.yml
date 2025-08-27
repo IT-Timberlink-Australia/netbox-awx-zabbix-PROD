@@ -50,12 +50,9 @@
     # --- Build a clean Zabbix endpoint: ensure exactly one '/api_jsonrpc.php'
     - name: Build Zabbix API endpoint URL (dedupe any trailing api_jsonrpc.php)
       set_fact:
-        _zbx_endpoint: >-
-          {{
-            (zabbix_api_url | trim
-                            | regex_replace('(/api_jsonrpc\\.php)+/?$', '')  # strip 1+ trailing occurrences
-                            | regex_replace('/+$', '')) ~ '/api_jsonrpc.php'
-          }}
+        _zbx_endpoint: "{{ (zabbix_api_url | trim
+                            | regex_replace('(/api_jsonrpc\\.php)+/?$', '')
+                            | regex_replace('/+$', '')) ~ '/api_jsonrpc.php' }}"
 
     - name: Debug final Zabbix endpoint
       debug:
