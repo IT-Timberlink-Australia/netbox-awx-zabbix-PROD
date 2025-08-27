@@ -20,7 +20,7 @@
     # -------- Zabbix from AWX env (API token) --------
     zabbix_api_url:   "{{ lookup('env','ZABBIX_API_URL') | default('', true) }}"   # e.g. https://itmonitor.example.com/zabbix OR full .../api_jsonrpc.php
     zabbix_api_token: "{{ lookup('env','ZABBIX_API_TOKEN') | default('', true) }}"
-    zbx_validate_certs: true
+    zbx_validate_certs: false
     zbx_filter_key: "name"  # set to 'host' if your names are Zabbix technical keys
 
     # -------- Outputs --------
