@@ -171,3 +171,58 @@
 
     # -------- Prepare and send NetBox PATCHes where ID changed --------
     - name: Compute pending updates for NetBox
+      set_fact:
+        _updates: "{{ (_updates | default([])) + [ {
+                   'id': item.id,
+                   'nb_detail_url': (_co_base ~ '/' ~ item.id ~ '/'),
+                   'name': item[name_field],
+                   'new_id': _use_map[item[name_field]]
+                 } ] }}"
+      loop: "{{ _nb_rows }}"
+      when:
+        - item[name_field] is defined
+        - _use_map.get(item[name_field]) is defined
+        - (item[id_field] | default('')) | string != (_use_map[item[name_field]] | string)
+
+    - name: PATCH template_id for each changed row in NetBox
+      when: (_updates | default([])) | length > 0
+      loop: "{{ _updates }}"
+      loop_control:
+        label: "{{ item.name }}"
+      uri:
+        url: "{{ item.nb_detail_url }}"
+        method: PATCH
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Content-Type: "application/json"
+          Accept: "application/json"
+        body_format: json
+        body: "{{ { id_field: item.new_id } }}"
+        status_code: [200]
+        return_content: true
+        validate_certs: "{{ nb_validate_certs }}"
+      register: nb_patch_results
+
+    - name: Summary
+      debug:
+        msg:
+          total_rows: "{{ _nb_rows | length }}"
+          updated: "{{ (_updates | default([])) | length }}"
+          missing_in_zabbix: "{{ _missing_names | length }}"
+
+    - name: Write JSON (name -> id map)
+      copy:
+        dest: "{{ out_json }}"
+        content: "{{ _use_map | to_nice_json }}"
+      delegate_to: localhost
+
+    - name: Write CSV from NetBox rows (name,existing_id,new_id)
+      copy:
+        dest: "{{ out_csv }}"
+        content: |
+          name,existing_id,new_id
+          {% for r in _nb_rows %}
+          {% set new = _use_map.get(r[name_field]) | default('') %}
+          {{ r[name_field] }},{{ r[id_field] | default('') }},{{ new }}
+          {% endfor %}
+      delegate_to: localhost
