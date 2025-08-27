@@ -1,4 +1,3 @@
-# nb_co_zabbix_templates_sync.yml
 ---
 - name: Sync Zabbix template IDs from NetBox Custom Object rows back into NetBox
   hosts: localhost
@@ -6,31 +5,24 @@
   gather_facts: false
 
   vars:
-    # ---------------- NetBox (from AWX env) ----------------
     netbox_api_url: "{{ lookup('env','NETBOX_API') | default('', true) }}"
     netbox_token:   "{{ lookup('env','NETBOX_TOKEN') | default('', true) }}"
     nb_validate_certs: true
 
-    # Your Custom Object Type collection endpoint (override if different)
-    # Example: "/api/plugins/netbox-custom-objects/zabbix-template-list/"
     co_collection_endpoint: "/api/plugins/netbox-custom-objects/zabbix-template-list/"
 
-    # Field names in your Custom Object Type
     name_field: "template_name"
     id_field:   "template_ID"
 
-    # ---------------- Zabbix (token auth, from AWX env) ----------------
     zabbix_api_url:   "{{ lookup('env','ZABBIX_API_URL') | default('', true) }}"
     zabbix_api_token: "{{ lookup('env','ZABBIX_API_TOKEN') | default('', true) }}"
     zbx_validate_certs: true
-    # Match on display name by default. Set to 'host' if your NetBox names are the technical keys.
+
     zbx_filter_key: "name"
 
-    # ---------------- AWX API (optional, not used here) ----------------
     awx_api_url: "{{ lookup('env','AWX_API_URL') | default('', true) }}"
     awx_token:   "{{ lookup('env','AWX_API_TOKEN') | default('', true) }}"
 
-    # ---------------- Paging & Outputs ----------------
     nb_page_size: 200
     out_json: "zbx_template_ids_from_nb.json"
     out_csv:  "zbx_template_ids_from_nb.csv"
@@ -54,7 +46,6 @@
                         (netbox_api_url.rstrip('/') ~ '/' ~ co_collection_endpoint.lstrip('/')).rstrip('/')))
           }}
 
-    # ---- Get total count, then page through the collection cleanly ----
     - name: Get collection count
       uri:
         url: "{{ _co_base }}?limit=1"
@@ -115,7 +106,6 @@
         msg: "No '{{ name_field }}' values found in NetBox custom object collection."
       when: (_names | default([])) | length == 0
 
-    # ---- Zabbix: template.get with token (no login step) ----
     - name: Query Zabbix template IDs (exact match on zbx_filter_key)
       uri:
         url: "{{ zabbix_api_url }}/api_jsonrpc.php"
@@ -154,7 +144,6 @@
       debug:
         msg: "No exact Zabbix match for: {{ _missing_names | join(', ') }}"
 
-    # ---- Prepare NetBox updates (only when Zabbix ID found AND changed) ----
     - name: Compute pending updates for NetBox
       set_fact:
         _updates: "{{ (_updates | default([])) + [ {
