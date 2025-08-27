@@ -1,24 +1,40 @@
+# nb_co_zabbix_templates_sync.yml
 ---
 - name: Sync Zabbix template IDs from NetBox Custom Object rows back into NetBox
   hosts: localhost
   connection: local
   gather_facts: false
+
   vars:
+    # ---------------- NetBox (from AWX env) ----------------
     netbox_api_url: "{{ lookup('env','NETBOX_API') | default('', true) }}"
     netbox_token:   "{{ lookup('env','NETBOX_TOKEN') | default('', true) }}"
     nb_validate_certs: true
+
+    # Your Custom Object Type collection endpoint (override if different)
+    # Example: "/api/plugins/netbox-custom-objects/zabbix-template-list/"
     co_collection_endpoint: "/api/plugins/netbox-custom-objects/zabbix-template-list/"
+
+    # Field names in your Custom Object Type
     name_field: "template_name"
     id_field:   "template_ID"
+
+    # ---------------- Zabbix (token auth, from AWX env) ----------------
     zabbix_api_url:   "{{ lookup('env','ZABBIX_API_URL') | default('', true) }}"
     zabbix_api_token: "{{ lookup('env','ZABBIX_API_TOKEN') | default('', true) }}"
     zbx_validate_certs: true
+    # Match on display name by default. Set to 'host' if your NetBox names are the technical keys.
     zbx_filter_key: "name"
+
+    # ---------------- AWX API (optional, not used here) ----------------
     awx_api_url: "{{ lookup('env','AWX_API_URL') | default('', true) }}"
     awx_token:   "{{ lookup('env','AWX_API_TOKEN') | default('', true) }}"
+
+    # ---------------- Paging & Outputs ----------------
     nb_page_size: 200
     out_json: "zbx_template_ids_from_nb.json"
     out_csv:  "zbx_template_ids_from_nb.csv"
+
   tasks:
     - name: Fail if required NetBox/Zabbix env vars are missing
       assert:
@@ -28,6 +44,7 @@
           - zabbix_api_url | length > 0
           - zabbix_api_token | length > 0
         fail_msg: "Set NETBOX_API/NETBOX_TOKEN and ZABBIX_API_URL/ZABBIX_API_TOKEN in AWX env."
+
     - name: Normalize NetBox custom object collection URL
       set_fact:
         _co_base: >-
@@ -36,6 +53,8 @@
               | ternary(co_collection_endpoint.rstrip('/'),
                         (netbox_api_url.rstrip('/') ~ '/' ~ co_collection_endpoint.lstrip('/')).rstrip('/')))
           }}
+
+    # ---- Get total count, then page through the collection cleanly ----
     - name: Get collection count
       uri:
         url: "{{ _co_base }}?limit=1"
@@ -47,10 +66,12 @@
         validate_certs: "{{ nb_validate_certs }}"
       register: nb_count_res
       failed_when: nb_count_res.status not in [200]
+
     - name: Compute offsets
       set_fact:
         _nb_count: "{{ nb_count_res.json.count | default((nb_count_res.json.results | length) | default(0)) }}"
         _offsets: "{{ range(0, _nb_count|int, nb_page_size|int) | list }}"
+
     - name: Fetch all rows
       vars:
         _rows: []
@@ -66,6 +87,7 @@
         return_content: true
         validate_certs: "{{ nb_validate_certs }}"
       register: nb_pages
+
     - name: Accumulate NetBox rows
       set_fact:
         _nb_rows: >-
@@ -76,20 +98,25 @@
               | list
               | flatten)
           }}
+
     - name: Fallback if API returns unpaginated array
       when: _nb_rows | length == 0 and (nb_pages.results | length) > 0
       set_fact:
         _nb_rows: "{{ nb_pages.results[0].json if nb_pages.results[0].json is mapping else nb_pages.results[0].json }}"
+
     - name: Build list of template names from NetBox rows
       set_fact:
         _names: "{{ (_names | default([])) + [ item[name_field] | string ] }}"
       loop: "{{ _nb_rows }}"
       when: item[name_field] is defined and (item[name_field] | string | length) > 0
+
     - name: Fail if no names found in NetBox rows
       fail:
         msg: "No '{{ name_field }}' values found in NetBox custom object collection."
       when: (_names | default([])) | length == 0
-    - nane: Query Zabbix template IDs (exact match on zbx_filter_key)
+
+    # ---- Zabbix: template.get with token (no login step) ----
+    - name: Query Zabbix template IDs (exact match on zbx_filter_key)
       uri:
         url: "{{ zabbix_api_url }}/api_jsonrpc.php"
         method: POST
@@ -108,6 +135,7 @@
         validate_certs: "{{ zbx_validate_certs }}"
       register: zbx_templates_res
       failed_when: zbx_templates_res.status not in [200]
+
     - name: Build maps from Zabbix results
       set_fact:
         _zbx_rows: "{{ zbx_templates_res.json.result | default([]) }}"
@@ -116,13 +144,17 @@
         _use_map: "{{ _map_by_name if zbx_filter_key == 'name' else _map_by_host }}"
         _returned_keys: "{{ _zbx_rows | map(attribute=zbx_filter_key) | list }}"
         _missing_names: "{{ _names | difference(_returned_keys) }}"
+
     - name: Show name -> templateid map (from Zabbix)
       debug:
         var: _use_map
+
     - name: Warn for names not found in Zabbix
       when: _missing_names | length > 0
       debug:
         msg: "No exact Zabbix match for: {{ _missing_names | join(', ') }}"
+
+    # ---- Prepare NetBox updates (only when Zabbix ID found AND changed) ----
     - name: Compute pending updates for NetBox
       set_fact:
         _updates: "{{ (_updates | default([])) + [ {
@@ -136,6 +168,7 @@
         - item[name_field] is defined
         - _use_map.get(item[name_field]) is defined
         - (item[id_field] | default('')) | string != (_use_map[item[name_field]] | string)
+
     - name: PATCH template_ID for each changed row in NetBox
       when: (_updates | default([])) | length > 0
       loop: "{{ _updates }}"
@@ -154,17 +187,20 @@
         return_content: true
         validate_certs: "{{ nb_validate_certs }}"
       register: nb_patch_results
+
     - name: Summary
       debug:
         msg:
           total_rows: "{{ _nb_rows | length }}"
           updated: "{{ (_updates | default([])) | length }}"
           missing_in_zabbix: "{{ _missing_names | length }}"
+
     - name: Write JSON (name -> id map)
       copy:
         dest: "{{ out_json }}"
         content: "{{ _use_map | to_nice_json }}"
       delegate_to: localhost
+
     - name: Write CSV from NetBox rows (name,existing_id,new_id)
       copy:
         dest: "{{ out_csv }}"
