@@ -13,7 +13,7 @@
 
     # Your Custom Object Type collection endpoint (override if different)
     # Example: "/api/plugins/netbox-custom-objects/zabbix-template-list/"
-    co_collection_endpoint: "/api/plugins/netbox-custom-objects/zabbix-template-list/"
+    co_collection_endpoint: "/api/plugins/custom-objects/zabbix-template-list/"
 
     # Field names in your Custom Object Type
     name_field: "template_name"
@@ -66,6 +66,19 @@
         validate_certs: "{{ nb_validate_certs }}"
       register: nb_count_res
       failed_when: nb_count_res.status not in [200]
+
+    - name: Probe Custom Object collection exists (must return 200)
+      uri:
+        url: "{{ _co_base }}/"         # ensure trailing slash
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        return_content: true
+        validate_certs: "{{ nb_validate_certs }}"
+        status_code: [200]
+      register: nb_co_probe
+      failed_when: nb_co_probe.status != 200
 
     - name: Compute offsets
       set_fact:
