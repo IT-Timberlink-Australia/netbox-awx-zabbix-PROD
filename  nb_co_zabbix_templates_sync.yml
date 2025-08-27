@@ -1,129 +1,112 @@
 # nb_co_zabbix_templates_sync.yml
 ---
-- name: Sync Zabbix template IDs from NetBox Custom Object to NetBox
+- name: Sync Zabbix template IDs from NetBox Custom Object rows back into NetBox
   hosts: localhost
   connection: local
   gather_facts: false
 
   vars:
-    # ---------------- NetBox ----------------
-    netbox_api_url: "{{ lookup('env', 'NETBOX_API') }}"
-    netbox_token: "{{ lookup('env', 'NETBOX_TOKEN') }}"
+    # ---------------- NetBox (from AWX env) ----------------
+    netbox_api_url: "{{ lookup('env','NETBOX_API') | default('', true) }}"
+    netbox_token:   "{{ lookup('env','NETBOX_TOKEN') | default('', true) }}"
     nb_validate_certs: true
 
-    # Either provide the full collection endpoint for your custom object type
-    # (recommended; trailing slash OK), for example:
-    #   /api/plugins/netbox-custom-objects/zabbix-template-list/
-    # or the absolute URL:
-    #   https://netbox.example.com/api/plugins/netbox-custom-objects/zabbix-template-list/
+    # Your Custom Object Type collection endpoint (override if different)
+    # Example: "/api/plugins/netbox-custom-objects/zabbix-template-list/"
     co_collection_endpoint: "/api/plugins/netbox-custom-objects/zabbix-template-list/"
 
-    # Field names in your Custom Object Type (case-sensitive)
+    # Field names in your Custom Object Type
     name_field: "template_name"
-    id_field: "template_ID"
+    id_field:   "template_ID"
 
-    # ---------------- Zabbix ----------------
-    zbx_url: "{{ lookup('env', 'ZABBIX_URL') | default('', true) }}"     # e.g. https://zabbix.example.com
-    zbx_user: "{{ lookup('env', 'ZABBIX_USER') | default('', true) }}"
-    zbx_password: "{{ lookup('env', 'ZABBIX_PASSWORD') | default('', true) }}"
+    # ---------------- Zabbix (token auth, from AWX env) ----------------
+    zabbix_api_url:   "{{ lookup('env','ZABBIX_API_URL') | default('', true) }}"
+    zabbix_api_token: "{{ lookup('env','ZABBIX_API_TOKEN') | default('', true) }}"
     zbx_validate_certs: true
-    # Most people want to match on the Zabbix Template *display* name:
-    zbx_filter_key: "name"   # change to "host" if you store technical keys
+    # Match on display name by default. Set to 'host' if your NetBox names are the technical keys.
+    zbx_filter_key: "name"
 
-    # ---------------- Output artifacts ----------------
+    # ---------------- AWX API (optional, not used here) ----------------
+    awx_api_url: "{{ lookup('env','AWX_API_URL') | default('', true) }}"
+    awx_token:   "{{ lookup('env','AWX_API_TOKEN') | default('', true) }}"
+
+    # ---------------- Paging & Outputs ----------------
+    nb_page_size: 200
     out_json: "zbx_template_ids_from_nb.json"
     out_csv:  "zbx_template_ids_from_nb.csv"
 
   tasks:
-    - name: Hard fail if required NetBox/Zabbix vars are missing
+    - name: Fail if required NetBox/Zabbix env vars are missing
       assert:
         that:
-          - nb_url | length > 0
-          - nb_token | length > 0
-          - zbx_url | length > 0
-          - zbx_user | length > 0
-          - zbx_password | length > 0
-        fail_msg: "Set NETBOX_URL/NETBOX_TOKEN and ZABBIX_URL/ZABBIX_USER/ZABBIX_PASSWORD (env or -e)."
+          - netbox_api_url | length > 0
+          - netbox_token   | length > 0
+          - zabbix_api_url | length > 0
+          - zabbix_api_token | length > 0
+        fail_msg: "Set NETBOX_API/NETBOX_TOKEN and ZABBIX_API_URL/ZABBIX_API_TOKEN in AWX env."
 
-    - name: Normalize NetBox collection URL
+    - name: Normalize NetBox custom object collection URL
       set_fact:
         _co_base: >-
           {{
             (co_collection_endpoint.startswith('http')
               | ternary(co_collection_endpoint.rstrip('/'),
-                        (nb_url.rstrip('/') ~ '/' ~ co_collection_endpoint.lstrip('/')).rstrip('/')))
+                        (netbox_api_url.rstrip('/') ~ '/' ~ co_collection_endpoint.lstrip('/')).rstrip('/')))
           }}
 
-    - name: Read all rows from the custom object collection (try limit=0 first)
+    # ---- Get total count, then page through the collection cleanly ----
+    - name: Get collection count
       uri:
-        url: "{{ _co_base }}?limit=0"
+        url: "{{ _co_base }}?limit=1"
         method: GET
         headers:
-          Authorization: "Token {{ nb_token }}"
+          Authorization: "Token {{ netbox_token }}"
           Accept: "application/json"
         return_content: true
         validate_certs: "{{ nb_validate_certs }}"
-      register: nb_co_first
-      failed_when: nb_co_first.status not in [200]
+      register: nb_count_res
+      failed_when: nb_count_res.status not in [200]
 
-    - name: Collect rows (handles paginated or unpaginated responses)
+    - name: Compute offsets
+      set_fact:
+        _nb_count: "{{ nb_count_res.json.count | default((nb_count_res.json.results | length) | default(0)) }}"
+        _offsets: "{{ range(0, _nb_count|int, nb_page_size|int) | list }}"
+
+    - name: Fetch all rows
+      vars:
+        _rows: []
+      loop: "{{ _offsets if _nb_count|int > 0 else [0] }}"
+      loop_control:
+        label: "offset={{ item }}"
+      uri:
+        url: "{{ _co_base }}?limit={{ nb_page_size }}&offset={{ item }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        return_content: true
+        validate_certs: "{{ nb_validate_certs }}"
+      register: nb_pages
+
+    - name: Accumulate NetBox rows
       set_fact:
         _nb_rows: >-
           {{
-            (nb_co_first.json.results | default(nb_co_first.json))
+            (nb_pages.results
+              | map(attribute='json')
+              | map(attribute='results', default=[])
+              | list
+              | flatten)
           }}
-        _next_url: "{{ nb_co_first.json.next | default(None) }}"
 
-    - name: Follow pagination if present
-      vars:
-        _pages: []
-      until: _next_url is not truthy
-      retries: 1
-      delay: 0
-      block:
-        - name: Stop if no next page
-          meta: end_play
-          when: _next_url is not truthy
-      rescue:
-        - debug:
-            msg: "Pagination not used (single page)."
-
-    # If your NetBox returns 'next', fetch subsequent pages:
-    - name: Fetch remaining pages (only runs if next exists)
-      when: _next_url is truthy
-      block:
-        - name: Init accumulator
-          set_fact:
-            _all_rows: "{{ _nb_rows }}"
-        - name: Loop pages
-          vars:
-            _cursor: "{{ _next_url }}"
-          until: _cursor is not truthy
-          retries: 9999
-          delay: 0
-          block:
-            - name: GET next page
-              uri:
-                url: "{{ _cursor }}"
-                method: GET
-                headers:
-                  Authorization: "Token {{ nb_token }}"
-                  Accept: "application/json"
-                return_content: true
-                validate_certs: "{{ nb_validate_certs }}"
-              register: nb_page
-              failed_when: nb_page.status not in [200]
-            - name: Accumulate rows and advance cursor
-              set_fact:
-                _all_rows: "{{ _all_rows + (nb_page.json.results | default([])) }}"
-                _cursor: "{{ nb_page.json.next | default(None) }}"
-        - name: Replace _nb_rows with all rows
-          set_fact:
-            _nb_rows: "{{ _all_rows }}"
+    - name: Fallback if API returns unpaginated array
+      when: _nb_rows | length == 0 and (nb_pages.results | length) > 0
+      set_fact:
+        _nb_rows: "{{ nb_pages.results[0].json if nb_pages.results[0].json is mapping else nb_pages.results[0].json }}"
 
     - name: Build list of template names from NetBox rows
       set_fact:
-        _names: "{{ (_names | default([])) + [ item[name_field] ] }}"
+        _names: "{{ (_names | default([])) + [ item[name_field] | string ] }}"
       loop: "{{ _nb_rows }}"
       when: item[name_field] is defined and (item[name_field] | string | length) > 0
 
@@ -132,32 +115,10 @@
         msg: "No '{{ name_field }}' values found in NetBox custom object collection."
       when: (_names | default([])) | length == 0
 
-    - name: Zabbix login (user.login)
+    # ---- Zabbix: template.get with token (no login step) ----
+    - name: Query Zabbix template IDs (exact match on zbx_filter_key)
       uri:
-        url: "{{ zbx_url }}/api_jsonrpc.php"
-        method: POST
-        headers:
-          Content-Type: "application/json-rpc"
-        body_format: json
-        body:
-          jsonrpc: "2.0"
-          method: "user.login"
-          params:
-            username: "{{ zbx_user }}"
-            password: "{{ zbx_password }}"
-          id: 1
-        return_content: true
-        validate_certs: "{{ zbx_validate_certs }}"
-      register: zbx_auth_res
-      failed_when: (zbx_auth_res.json.result | default('')) | length == 0
-
-    - name: Capture auth token
-      set_fact:
-        zbx_auth: "{{ zbx_auth_res.json.result }}"
-
-    - name: Query Zabbix template IDs for names from NetBox
-      uri:
-        url: "{{ zbx_url }}/api_jsonrpc.php"
+        url: "{{ zabbix_api_url }}/api_jsonrpc.php"
         method: POST
         headers:
           Content-Type: "application/json-rpc"
@@ -168,8 +129,8 @@
           params:
             output: ["templateid","name","host"]
             filter: { "{{ zbx_filter_key }}": "{{ _names }}" }
-          auth: "{{ zbx_auth }}"
-          id: 2
+          auth: "{{ zabbix_api_token }}"
+          id: 1
         return_content: true
         validate_certs: "{{ zbx_validate_certs }}"
       register: zbx_templates_res
@@ -181,7 +142,8 @@
         _map_by_name: "{{ dict((_zbx_rows | map(attribute='name') | list) | zip(_zbx_rows | map(attribute='templateid') | list)) }}"
         _map_by_host: "{{ dict((_zbx_rows | map(attribute='host') | list) | zip(_zbx_rows | map(attribute='templateid') | list)) }}"
         _use_map: "{{ _map_by_name if zbx_filter_key == 'name' else _map_by_host }}"
-        _missing_names: "{{ _names | difference((_zbx_rows | map(attribute=zbx_filter_key) | list)) }}"
+        _returned_keys: "{{ _zbx_rows | map(attribute=zbx_filter_key) | list }}"
+        _missing_names: "{{ _names | difference(_returned_keys) }}"
 
     - name: Show name -> templateid map (from Zabbix)
       debug:
@@ -192,7 +154,8 @@
       debug:
         msg: "No exact Zabbix match for: {{ _missing_names | join(', ') }}"
 
-    - name: Compute pending updates for NetBox (only when ID is found and changed)
+    # ---- Prepare NetBox updates (only when Zabbix ID found AND changed) ----
+    - name: Compute pending updates for NetBox
       set_fact:
         _updates: "{{ (_updates | default([])) + [ {
                    'id': item.id,
@@ -215,7 +178,7 @@
         url: "{{ item.nb_detail_url }}"
         method: PATCH
         headers:
-          Authorization: "Token {{ nb_token }}"
+          Authorization: "Token {{ netbox_token }}"
           Content-Type: "application/json"
           Accept: "application/json"
         body_format: json
@@ -228,8 +191,8 @@
     - name: Summary
       debug:
         msg:
+          total_rows: "{{ _nb_rows | length }}"
           updated: "{{ (_updates | default([])) | length }}"
-          skipped: "{{ (_nb_rows | length) - ((_updates | default([])) | length) }}"
           missing_in_zabbix: "{{ _missing_names | length }}"
 
     - name: Write JSON (name -> id map)
@@ -248,20 +211,3 @@
           {{ r[name_field] }},{{ r[id_field] | default('') }},{{ new }}
           {% endfor %}
       delegate_to: localhost
-
-    - name: Zabbix logout (best effort)
-      uri:
-        url: "{{ zbx_url }}/api_jsonrpc.php"
-        method: POST
-        headers:
-          Content-Type: "application/json-rpc"
-        body_format: json
-        body:
-          jsonrpc: "2.0"
-          method: "user.logout"
-          params: []
-          auth: "{{ zbx_auth }}"
-          id: 3
-        return_content: true
-        validate_certs: "{{ zbx_validate_certs }}"
-      ignore_errors: true
