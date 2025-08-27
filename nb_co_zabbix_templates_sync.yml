@@ -1,4 +1,4 @@
-# templates_sync.yml
+# nb_co_zabbix_templates_sync.yml
 ---
 - name: Sync Zabbix template IDs from NetBox Custom Object rows back into NetBox (cert checks OFF)
   hosts: localhost
@@ -6,18 +6,18 @@
   gather_facts: false
 
   vars:
-    # -------- NetBox from AWX env --------
+    # -------- NetBox (from AWX env) --------
     netbox_api_url: "{{ lookup('env','NETBOX_API') | default('', true) }}"
     netbox_token:   "{{ lookup('env','NETBOX_TOKEN') | default('', true) }}"
 
-    # Use the real API path (NOT the HTML UI path)
+    # Real API path (NOT the HTML UI path)
     nb_collection_url: "{{ (netbox_api_url | trim | regex_replace('/+$','')) ~ '/api/plugins/custom-objects/zabbix-template-list/' }}"
 
     # Field names in your Custom Object
     name_field: "template_name"
     id_field:   "template_id"
 
-    # -------- Zabbix from AWX env (API token) --------
+    # -------- Zabbix (from AWX env) --------
     zabbix_api_url_raw: "{{ lookup('env','ZABBIX_API_URL') | default('', true) }}"
     zabbix_api_token:   "{{ lookup('env','ZABBIX_API_TOKEN') | default('', true) }}"
     # Use 'host' if your NetBox names are Zabbix technical keys instead of display names
@@ -54,13 +54,12 @@
           Accept: "application/json"
         return_content: true
         validate_certs: false
+        status_code: [200]
       register: nb_page
-      failed_when: >
-        nb_page.status not in [200] or
-        ((nb_page.content_type | default('') | lower) | regex_search('text/html'))
-        - name: Collect NetBox rows
-          set_fact:
-            _nb_rows: "{{ nb_page.json.results | default([]) }}"
+
+    - name: Collect NetBox rows
+      set_fact:
+        _nb_rows: "{{ nb_page.json.results | default([]) }}"
 
     - name: Extract template names from NetBox rows
       set_fact:
@@ -122,13 +121,9 @@
              if (_names | difference((_map_by_host.keys() | list))) | length == 0
              else _map_by_name }}
 
-    # ---- SPLIT these so ordering is correct
-    - name: Compute returned keys (from Zabbix)
-      set_fact:
-        _returned_keys: "{{ _zbx_rows | map(attribute=zbx_filter_key) | list }}"
-
     - name: Compute names missing in Zabbix
       set_fact:
+        _returned_keys: "{{ _zbx_rows | map(attribute=zbx_filter_key) | list }}"
         _missing_names: "{{ _names | difference(_returned_keys | default([])) }}"
 
     - name: Show name -> templateid map (from Zabbix)
