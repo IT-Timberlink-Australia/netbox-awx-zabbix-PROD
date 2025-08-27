@@ -54,10 +54,13 @@
           Accept: "application/json"
         return_content: true
         validate_certs: false
+        status_code: [200]
       register: nb_page
-      failed_when: >
-        nb_page.status not in [200] or
-        ((nb_page.content_type | default('') | lower) | regex_search('text/html'))
+
+    - name: Guard: fail if NetBox returned HTML (you hit UI not API)
+      fail:
+        msg: "NetBox returned HTML (login). Use the API path: /api/plugins/custom-objects/…"
+      when: nb_page.content_type is defined and (nb_page.content_type | lower) | regex_search('text/html')
 
     - name: Collect NetBox rows
       set_fact:
@@ -123,10 +126,14 @@
              if (_names | difference((_map_by_host.keys() | list))) | length == 0
              else _map_by_name }}
 
-    - name: Compute names missing in Zabbix
+    # ---- SPLIT these so ordering is correct
+    - name: Compute returned keys (from Zabbix)
       set_fact:
         _returned_keys: "{{ _zbx_rows | map(attribute=zbx_filter_key) | list }}"
-        _missing_names: "{{ _names | difference(_returned_keys) }}"
+
+    - name: Compute names missing in Zabbix
+      set_fact:
+        _missing_names: "{{ _names | difference(_returned_keys | default([])) }}"
 
     - name: Show name -> templateid map (from Zabbix)
       debug:
@@ -150,7 +157,6 @@
       when:
         - item[name_field] is defined
         - _zbx_map.get(item[name_field]) is defined
-        # ← Skip rows that already have a template_id (non-empty)
         - (item[id_field] is not defined) or (((item[id_field] | string) | trim) == '')
 
     - name: PATCH template_id for each changed row in NetBox
