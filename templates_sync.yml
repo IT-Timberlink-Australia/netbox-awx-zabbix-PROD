@@ -8,20 +8,20 @@
     # -------- NetBox from AWX env --------
     netbox_api_url: "{{ lookup('env','NETBOX_API') | default('', true) }}"
     netbox_token:   "{{ lookup('env','NETBOX_TOKEN') | default('', true) }}"
-    nb_validate_certs: true
+    nb_validate_certs: false
 
-    # Your Custom Object collection (correct plugin slug + trailing slash)
+    # Custom Object collection (correct plugin slug + trailing slash)
     co_collection_endpoint: "/api/plugins/custom-objects/zabbix-template-list/"
 
     # Field names in your Custom Object
     name_field: "template_name"
-    id_field:   "template_id"     # lower-case matches your API
+    id_field:   "template_id"     # lower-case matches API
 
     # -------- Zabbix from AWX env (API token) --------
-    zabbix_api_url:   "{{ lookup('env','ZABBIX_API_URL') | default('', true) }}"   # e.g. https://itmonitor.example.com/zabbix OR full .../api_jsonrpc.php
+    zabbix_api_url:   "{{ lookup('env','ZABBIX_API_URL') | default('', true) }}"   
     zabbix_api_token: "{{ lookup('env','ZABBIX_API_TOKEN') | default('', true) }}"
     zbx_validate_certs: false
-    zbx_filter_key: "name"  # set to 'host' if your names are Zabbix technical keys
+    zbx_filter_key: "name"  # set to 'host' if names are Zabbix technical keys
 
     # -------- Outputs --------
     nb_page_size: 200
