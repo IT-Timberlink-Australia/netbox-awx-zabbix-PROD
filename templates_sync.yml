@@ -1,5 +1,6 @@
+# templates_sync.yml
 ---
-- name: Sync Zabbix template IDs from NetBox Custom Object rows back into NetBox
+- name: Sync Zabbix template IDs from NetBox Custom Object rows back into NetBox (cert checks OFF)
   hosts: localhost
   connection: local
   gather_facts: false
@@ -8,20 +9,19 @@
     # -------- NetBox from AWX env --------
     netbox_api_url: "{{ lookup('env','NETBOX_API') | default('', true) }}"
     netbox_token:   "{{ lookup('env','NETBOX_TOKEN') | default('', true) }}"
-    nb_validate_certs: false
 
-    # Custom Object collection (correct plugin slug + trailing slash)
+    # Your Custom Object collection (correct plugin slug + trailing slash)
     co_collection_endpoint: "/api/plugins/custom-objects/zabbix-template-list/"
 
     # Field names in your Custom Object
     name_field: "template_name"
-    id_field:   "template_id"     # lower-case matches API
+    id_field:   "template_id"
 
     # -------- Zabbix from AWX env (API token) --------
-    zabbix_api_url:   "{{ lookup('env','ZABBIX_API_URL') | default('', true) }}"   
+    zabbix_api_url:   "{{ lookup('env','ZABBIX_API_URL') | default('', true) }}"
     zabbix_api_token: "{{ lookup('env','ZABBIX_API_TOKEN') | default('', true) }}"
-    zbx_validate_certs: false
-    zbx_filter_key: "name"  # set to 'host' if names are Zabbix technical keys
+    # Use 'host' if your NetBox names are Zabbix technical keys instead of display names
+    zbx_filter_key: "name"
 
     # -------- Outputs --------
     nb_page_size: 200
@@ -47,17 +47,13 @@
                         (netbox_api_url.rstrip('/') ~ '/' ~ co_collection_endpoint.lstrip('/')).rstrip('/')))
           }}
 
-    # --- Build a clean Zabbix endpoint: ensure exactly one '/api_jsonrpc.php'
     - name: Build Zabbix API endpoint URL (dedupe any trailing api_jsonrpc.php)
       set_fact:
         _zbx_endpoint: "{{ (zabbix_api_url | trim
-                            | regex_replace('(/api_jsonrpc\\.php)+/?$', '')
-                            | regex_replace('/+$', '')) ~ '/api_jsonrpc.php' }}"
+                              | regex_replace('(/api_jsonrpc\\.php)+/?$', '')
+                              | regex_replace('/+$', '')) ~ '/api_jsonrpc.php' }}"
 
-    - name: Debug final Zabbix endpoint
-      debug:
-        var: _zbx_endpoint
-
+    # ---- NetBox: get total count, then page through collection ----
     - name: Get collection count (paged API)
       uri:
         url: "{{ _co_base }}?limit=1"
@@ -66,7 +62,7 @@
           Authorization: "Token {{ netbox_token }}"
           Accept: "application/json"
         return_content: true
-        validate_certs: "{{ nb_validate_certs }}"
+        validate_certs: false
         status_code: [200]
       register: nb_count_res
 
@@ -90,7 +86,7 @@
           Authorization: "Token {{ netbox_token }}"
           Accept: "application/json"
         return_content: true
-        validate_certs: "{{ nb_validate_certs }}"
+        validate_certs: false
         status_code: [200]
       register: nb_pages
 
@@ -122,16 +118,15 @@
       when: item[name_field] is defined and (item[name_field] | string | length) > 0
 
     - name: Fail if no names found in NetBox rows
-      fail:
+     .fail:
         msg: "No '{{ name_field }}' values found in NetBox custom object collection."
       when: (_names | default([])) | length == 0
 
-    # --- Build the Zabbix 'filter' dict with a dynamic key (this avoids the Jinja key-not-rendering bug)
-    - name: Build Zabbix filter object
+    # ---- Zabbix: build filter and query template IDs (token auth) ----
+    - name: Build Zabbix filter object (dynamic key)
       set_fact:
         _zbx_filter: "{{ { (zbx_filter_key): _names } }}"
 
-    # -------- Zabbix template.get using API token --------
     - name: Query Zabbix template IDs (exact match)
       uri:
         url: "{{ _zbx_endpoint }}"
@@ -146,10 +141,10 @@
           params:
             output: ["templateid","name","host"]
             filter: "{{ _zbx_filter }}"
-          auth: "{{ zabbix_api_token }}"     # optional; header is the real auth
+          auth: "{{ zabbix_api_token }}"
           id: 1
         return_content: true
-        validate_certs: "{{ zbx_validate_certs }}"
+        validate_certs: false
         status_code: [200]
       register: zbx_templates_res
 
@@ -171,7 +166,7 @@
       debug:
         msg: "No exact Zabbix match for: {{ _missing_names | join(', ') }}"
 
-    # -------- Prepare and send NetBox PATCHes where ID changed --------
+    # ---- Prepare and send NetBox PATCHes where ID changed ----
     - name: Compute pending updates for NetBox
       set_fact:
         _updates: "{{ (_updates | default([])) + [ {
@@ -200,9 +195,9 @@
           Accept: "application/json"
         body_format: json
         body: "{{ { id_field: item.new_id } }}"
-        status_code: [200]
+        status_code: [200, 204]
         return_content: true
-        validate_certs: "{{ nb_validate_certs }}"
+        validate_certs: false
       register: nb_patch_results
 
     - name: Summary
