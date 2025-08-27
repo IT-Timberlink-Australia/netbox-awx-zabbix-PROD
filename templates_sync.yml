@@ -54,17 +54,13 @@
           Accept: "application/json"
         return_content: true
         validate_certs: false
-        status_code: [200]
       register: nb_page
-
-    - name: Guard: fail if NetBox returned HTML (you hit UI not API)
-      fail:
-        msg: "NetBox returned HTML (login). Use the API path: /api/plugins/custom-objects/…"
-      when: nb_page.content_type is defined and (nb_page.content_type | lower) | regex_search('text/html')
-
-    - name: Collect NetBox rows
-      set_fact:
-        _nb_rows: "{{ nb_page.json.results | default([]) }}"
+      failed_when: >
+        nb_page.status not in [200] or
+        ((nb_page.content_type | default('') | lower) | regex_search('text/html'))
+        - name: Collect NetBox rows
+          set_fact:
+            _nb_rows: "{{ nb_page.json.results | default([]) }}"
 
     - name: Extract template names from NetBox rows
       set_fact:
