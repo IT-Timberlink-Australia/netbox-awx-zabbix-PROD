@@ -118,7 +118,7 @@
       when: item[name_field] is defined and (item[name_field] | string | length) > 0
 
     - name: Fail if no names found in NetBox rows
-     .fail:
+      fail:
         msg: "No '{{ name_field }}' values found in NetBox custom object collection."
       when: (_names | default([])) | length == 0
 
