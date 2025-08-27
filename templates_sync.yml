@@ -57,7 +57,7 @@
         status_code: [200]
       register: nb_page
 
-    - name: Guard: fail if NetBox returned HTML (you hit UI not API)
+    - name: Guard fail if NetBox returned HTML (you hit UI not API)
       fail:
         msg: "NetBox returned HTML (login). Use the API path: /api/plugins/custom-objects/…"
       when: nb_page.content_type is defined and (nb_page.content_type | lower) is search('text/html')
@@ -141,18 +141,20 @@
         msg: "No exact Zabbix match for: {{ _missing_names | join(', ') }}"
 
     # ---- PATCH back to NetBox where needed ----
-    - name: Compute pending updates for NetBox
+    - name: Compute pending updates for NetBox (ONLY where template_id is empty/null)
       set_fact:
         _updates: "{{ (_updates | default([])) + [ {
                    'url': nb_collection_url ~ item.id ~ '/',
                    'name': item[name_field],
                    'current': item[id_field] | default(''),
-                   'new_id': _zbx_map[item[name_field]] | default(omit)
+                   'new_id': _zbx_map[item[name_field]]
                  } ] }}"
       loop: "{{ _nb_rows }}"
       when:
         - item[name_field] is defined
         - _zbx_map.get(item[name_field]) is defined
+        # ← Skip rows that already have a template_id (non-empty)
+        - (item[id_field] is not defined) or (((item[id_field] | string) | trim) == '')
 
     - name: PATCH template_id for each changed row in NetBox
       when: (_updates | default([])) | length > 0
@@ -179,6 +181,7 @@
         msg:
           total_rows: "{{ _nb_rows | length }}"
           updated: "{{ (nb_patch_results.results | default([])) | length }}"
+          skipped_non_empty: "{{ (_nb_rows | selectattr(id_field,'defined') | rejectattr(id_field,'equalto','') | list | length) }}"
           missing_in_zabbix: "{{ _missing_names | default([]) | list }}"
 
     - name: Write JSON (name -> id map)
