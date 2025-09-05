@@ -1,18 +1,10 @@
 plugin: netbox.netbox.nb_inventory
 
-# Auth from your existing AWX credential (env vars)
-api_endpoint: "{{ lookup('env','NETBOX_API') }}"
-token: "{{ lookup('env','NETBOX_TOKEN') }}"
-validate_certs: "{{ (lookup('env','NETBOX_VERIFY') | default('true')) | bool }}"
-
-# Include VMs too
 fetch_virtual_machines: true
 
-# Only objects explicitly marked for monitoring
 query_filters:
   - cf_mon_req: "true"
 
-# Handy grouping (optional)
 keyed_groups:
   - key: zbx_site
     prefix: site
@@ -22,9 +14,9 @@ keyed_groups:
     prefix: os
 
 compose:
-  # ---- Core names ----
   zbx_host_name: "{{ name }}"
-  # Strict visible-name rule: CF override else require description; else None
+
+  # Visible name: CF override else require description; else None (fail)
   zbx_visible_name: >-
     {% if custom_fields is defined and 'cf_zb_vname' in custom_fields and custom_fields.cf_zb_vname %}
       {{ custom_fields.cf_zb_vname }}
@@ -34,7 +26,7 @@ compose:
       {{ None }}
     {% endif %}
 
-  # ---- Platform-driven fields ----
+  # Platform-driven
   zbx_primary_template_id: >-
     {{ (platform.custom_fields.zb_pri_template_id) if (platform is defined
        and platform.custom_fields is defined
@@ -45,7 +37,7 @@ compose:
        and 'zb_pri_template_int_id' in platform.custom_fields) else None }}
   zbx_os: "{{ platform.slug | default(None) }}"
 
-  # ---- Interface IP (CF override else primary IPv4) ----
+  # Interface IP (CF override else primary IPv4)
   zbx_interface_ip: >-
     {% if custom_fields is defined and 'cf_zb_int_ip' in custom_fields and custom_fields.cf_zb_int_ip %}
       {{ custom_fields.cf_zb_int_ip }}
@@ -55,7 +47,7 @@ compose:
       {{ None }}
     {% endif %}
 
-  # ---- Misc from object/site/role CFs ----
+  # Object/Site/Role CFs
   zbx_env: "{{ (custom_fields.cf_zb_mon_env if custom_fields is defined and 'cf_zb_mon_env' in custom_fields else None) }}"
   zbx_site: "{{ site.slug | default(None) }}"
   zbx_proxy_id: >-
@@ -83,16 +75,10 @@ compose:
       {{ None }}
     {% endif %}
 
-  # ---- Extra templates (already a CF list/CSV) ----
+  # Extra templates (list/CSV CF)
   zbx_extra_template_ids: "{{ custom_fields.cf_zb_extra_templates | default([]) }}"
 
-  # ---- “Synced” flag via tag (playbook can add tag `zbx_synced` after success) ----
-  zbx_synced: >-
-    {# tags can be list[str] or list[objects] depending on collection version #}
-    {% set tag_names = (tags | map(attribute='name') | list) if (tags is defined and tags|length>0 and (tags[0] is mapping)) else (tags | default([])) %}
-    {{ 'zbx_synced' in tag_names }}
-
-  # ---- Caution condition -> set AWX "Enabled Variable" to this ----
+  # Ready-to-sync flag (aka your “caution” condition)
   zbx_enabled: >-
     {{
       (custom_fields.cf_mon_req | default(false))
@@ -106,5 +92,4 @@ compose:
       and (zbx_proxy_id is not none and (zbx_proxy_id|string)|length > 0)
       and (zbx_group_id is not none and (zbx_group_id|string)|length > 0)
       and (zbx_sla_code is not none and (zbx_sla_code|string)|length > 0)
-      and (not zbx_synced)
     }}
