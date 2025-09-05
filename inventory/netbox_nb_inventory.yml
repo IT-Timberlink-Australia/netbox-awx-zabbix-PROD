@@ -1,0 +1,110 @@
+plugin: netbox.netbox.nb_inventory
+
+# Auth from your existing AWX credential (env vars)
+api_endpoint: "{{ lookup('env','NETBOX_API') }}"
+token: "{{ lookup('env','NETBOX_TOKEN') }}"
+validate_certs: "{{ (lookup('env','NETBOX_VERIFY') | default('true')) | bool }}"
+
+# Include VMs too
+fetch_virtual_machines: true
+
+# Only objects explicitly marked for monitoring
+query_filters:
+  - cf_mon_req: "true"
+
+# Handy grouping (optional)
+keyed_groups:
+  - key: zbx_site
+    prefix: site
+  - key: zbx_env
+    prefix: env
+  - key: zbx_os
+    prefix: os
+
+compose:
+  # ---- Core names ----
+  zbx_host_name: "{{ name }}"
+  # Strict visible-name rule: CF override else require description; else None
+  zbx_visible_name: >-
+    {% if custom_fields is defined and 'cf_zb_vname' in custom_fields and custom_fields.cf_zb_vname %}
+      {{ custom_fields.cf_zb_vname }}
+    {% elif description is defined and description|length > 0 %}
+      {{ name }} - {{ description }}
+    {% else %}
+      {{ None }}
+    {% endif %}
+
+  # ---- Platform-driven fields ----
+  zbx_primary_template_id: >-
+    {{ (platform.custom_fields.zb_pri_template_id) if (platform is defined
+       and platform.custom_fields is defined
+       and 'zb_pri_template_id' in platform.custom_fields) else None }}
+  zbx_template_interface_id: >-
+    {{ (platform.custom_fields.zb_pri_template_int_id) if (platform is defined
+       and platform.custom_fields is defined
+       and 'zb_pri_template_int_id' in platform.custom_fields) else None }}
+  zbx_os: "{{ platform.slug | default(None) }}"
+
+  # ---- Interface IP (CF override else primary IPv4) ----
+  zbx_interface_ip: >-
+    {% if custom_fields is defined and 'cf_zb_int_ip' in custom_fields and custom_fields.cf_zb_int_ip %}
+      {{ custom_fields.cf_zb_int_ip }}
+    {% elif primary_ip is defined and primary_ip.address is defined %}
+      {{ primary_ip.address.split('/')[0] }}
+    {% else %}
+      {{ None }}
+    {% endif %}
+
+  # ---- Misc from object/site/role CFs ----
+  zbx_env: "{{ (custom_fields.cf_zb_mon_env if custom_fields is defined and 'cf_zb_mon_env' in custom_fields else None) }}"
+  zbx_site: "{{ site.slug | default(None) }}"
+  zbx_proxy_id: >-
+    {% if site is defined and site.custom_fields is defined and 'zb_proxy_id' in site.custom_fields and site.custom_fields.zb_proxy_id %}
+      {{ site.custom_fields.zb_proxy_id }}
+    {% elif custom_fields is defined and 'cf_zb_proxy_id' in custom_fields and custom_fields.cf_zb_proxy_id %}
+      {{ custom_fields.cf_zb_proxy_id }}
+    {% else %}
+      {{ None }}
+    {% endif %}
+  zbx_group_id: >-
+    {% if site is defined and site.custom_fields is defined and 'zb_group_id' in site.custom_fields and site.custom_fields.zb_group_id %}
+      {{ site.custom_fields.zb_group_id }}
+    {% elif custom_fields is defined and 'cf_zb_group_id' in custom_fields and custom_fields.cf_zb_group_id %}
+      {{ custom_fields.cf_zb_group_id }}
+    {% else %}
+      {{ None }}
+    {% endif %}
+  zbx_sla_code: >-
+    {% if role is defined and role.custom_fields is defined and 'sla_report_code' in role.custom_fields and role.custom_fields.sla_report_code %}
+      {{ role.custom_fields.sla_report_code }}
+    {% elif role is defined and role.sla_report_code is defined %}
+      {{ role.sla_report_code }}
+    {% else %}
+      {{ None }}
+    {% endif %}
+
+  # ---- Extra templates (already a CF list/CSV) ----
+  zbx_extra_template_ids: "{{ custom_fields.cf_zb_extra_templates | default([]) }}"
+
+  # ---- “Synced” flag via tag (playbook can add tag `zbx_synced` after success) ----
+  zbx_synced: >-
+    {# tags can be list[str] or list[objects] depending on collection version #}
+    {% set tag_names = (tags | map(attribute='name') | list) if (tags is defined and tags|length>0 and (tags[0] is mapping)) else (tags | default([])) %}
+    {{ 'zbx_synced' in tag_names }}
+
+  # ---- Caution condition -> set AWX "Enabled Variable" to this ----
+  zbx_enabled: >-
+    {{
+      (custom_fields.cf_mon_req | default(false))
+      and (zbx_visible_name is string)
+      and (zbx_primary_template_id is not none and (zbx_primary_template_id|string)|length > 0)
+      and (zbx_template_interface_id is not none and (zbx_template_interface_id|string)|length > 0)
+      and (zbx_interface_ip is not none and (zbx_interface_ip|string)|length > 0)
+      and (zbx_env is not none and (zbx_env|string)|length > 0)
+      and (zbx_os is not none and (zbx_os|string)|length > 0)
+      and (zbx_site is not none and (zbx_site|string)|length > 0)
+      and (zbx_proxy_id is not none and (zbx_proxy_id|string)|length > 0)
+      and (zbx_group_id is not none and (zbx_group_id|string)|length > 0)
+      and (zbx_sla_code is not none and (zbx_sla_code|string)|length > 0)
+      and (not zbx_synced)
+    }}
