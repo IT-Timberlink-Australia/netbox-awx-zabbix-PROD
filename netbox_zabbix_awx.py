@@ -15,7 +15,7 @@ def safe(name: str) -> str:
     return "".join(out).strip("_") or "unknown"
 
 def main():
-    base = os.getenv("NETBOX_URL", "").rstrip("/")
+    base = os.getenv("NETBOX_API", "").rstrip("/")
     token = os.getenv("NETBOX_TOKEN", "")
     badge = os.getenv("NETBOX_BADGE", "caution").strip().lower()  # ok|caution|fail
     timeout = float(os.getenv("NETBOX_TIMEOUT", "15"))
@@ -23,7 +23,7 @@ def main():
 
     if not base or not token:
         print("{}", end="")
-        print("NETBOX_URL and NETBOX_TOKEN are required", file=sys.stderr)
+        print("NETBOX_API and NETBOX_TOKEN are required", file=sys.stderr)
         sys.exit(0)
 
     url = f"{base}/api/plugins/netbox-zabbix/awx-inventory/"
