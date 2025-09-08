@@ -1,0 +1,16 @@
+plugin: netbox.netbox.nb_inventory
+
+api_endpoint: "{{ lookup('env', 'NETBOX_API') | default(omit) }}"
+token: "{{ lookup('env', 'NETBOX_TOKEN') | default(omit) }}"
+validate_certs: "{{ (lookup('env', 'NETBOX_VERIFY') | default('true')) | bool }}"
+
+config_context: false
+strict: false
+
+query_filters:
+  - cf_zbp_status: "Remove Pending"
+
+compose:
+  host_name: name
+  zbx_proxy_id: custom_fields.zbp_proxy_id
+  # add anything else you need for the removal task
