@@ -1,0 +1,40 @@
+plugin: netbox.netbox.nb_inventory
+
+config_context: false
+strict: false
+
+# Only pull monitored objects
+query_filters:
+  status: active
+  # support either custom field name ("mon_req") or legacy ("cf_mon_req")
+  cf_mon_req: "true"
+
+# Flatten the NetBox custom fields you care about into top-level hostvars
+compose:
+  host_name: name
+  visible_name: custom_fields.zbp_vname
+  primary_template_id: custom_fields.zbp_pri_template_name_id
+  primary_template: custom_fields.zbp_pri_template_name
+  template_interface_id: custom_fields.zbp_pri_template_int_id
+  template_interface: custom_fields.zbp_pri_template_int_name
+  host_ip: custom_fields.zbp_int_ip | default(primary_ip4.address | default('') | regex_replace('/\\d+$',''))
+  extra_templates: custom_fields.zb_extra_templates
+  environment: custom_fields.zb_mon_env
+  os: platform.slug
+  site: site.slug
+  zbx_proxy_id: custom_fields.zbp_proxy_id
+  zbx_group_id: custom_fields.zbp_group_id
+  sla_code: custom_fields.zbp_sla_code
+  nb_status: status.value
+
+# Optional: create groups you can target in AWX
+keyed_groups:
+  - key: site
+    prefix: site
+    separator: "_"
+  - key: zbx_group_id
+    prefix: zbgroup
+    separator: "_"
+  - key: zbx_proxy_id
+    prefix: zbproxy
+    separator: "_"
