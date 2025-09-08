@@ -3,10 +3,9 @@ plugin: netbox.netbox.nb_inventory
 config_context: false
 strict: false
 
-# MUST be a list, not a dict
+# Only include objects ready to sync to Zabbix
 query_filters:
-  - status: active
-  - cf_mon_req: true
+  - cf_zbp_status: "Not Synced"
 
 compose:
   host_name: name
@@ -16,7 +15,7 @@ compose:
   template_interface_id: custom_fields.zbp_pri_template_int_id
   template_interface: custom_fields.zbp_pri_template_int_name
   host_ip: >-
-    {{ custom_fields.zbp_int_ip | default(primary_ip4.address | default('') | regex_replace('/\\d+$','')) }}
+    {{ custom_fields.zbp_int_ip | default(primary_ip4.address | default('') | regex_replace('/\d+$','')) }}
   extra_templates: custom_fields.zb_extra_templates
   environment: custom_fields.zb_mon_env
   os: platform.slug
