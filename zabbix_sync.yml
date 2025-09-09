@@ -31,6 +31,16 @@
           - nb_url | regex_search('/api/?$')
         fail_msg: "Need ZABBIX_URL and either ZABBIX_TOKEN or ZABBIX_USER/PASS; NETBOX_API must be the API root (…/api)."
 
+    # Normalize NetBox URL when the cred gives the base host instead of the API root
+    - name: Normalize NetBox URL (clean)
+      set_fact:
+        _nb_clean: "{{ nb_url | regex_replace('/+$','') }}"
+
+    - name: Derive NetBox API root and base
+      set_fact:
+        nb_api_root: "{{ (_nb_clean | regex_search('/api$')) | ternary(_nb_clean, _nb_clean ~ '/api') }}"
+        nb_base:     "{{ _nb_clean | regex_replace('/api$','') }}"
+
     # ---------- Zabbix URL parsing (robust) ----------
     - name: Derive Zabbix connection components
       set_fact:
@@ -75,7 +85,7 @@
     # ---------- Probe NetBox CFs using the API ----------
     - name: Probe NetBox CF zbp_last_sync
       uri:
-        url: "{{ nb_url | regex_replace('/+$','') }}/extras/custom-fields/?name=zbp_last_sync"
+        url: "{{ nb_api_root }}/extras/custom-fields/?name=zbp_last_sync"
         method: GET
         headers:
           Authorization: "Token {{ nb_token }}"
@@ -87,7 +97,7 @@
 
     - name: Probe NetBox CF zbp_sync_hint
       uri:
-        url: "{{ nb_url | regex_replace('/+$','') }}/extras/custom-fields/?name=zbp_sync_hint"
+        url: "{{ nb_api_root }}/extras/custom-fields/?name=zbp_sync_hint"
         method: GET
         headers:
           Authorization: "Token {{ nb_token }}"
@@ -375,7 +385,7 @@
           when: not (hostvars[inventory_hostname].is_virtual | default(false))
           delegate_to: localhost
           netbox.netbox.netbox_device:
-            netbox_url: "{{ nb_url | regex_replace('/+$','') | regex_replace('/api$','') }}"
+            netbox_url: "{{ nb_base }}"
             netbox_token: "{{ nb_token }}"
             validate_certs: "{{ nb_verify }}"
             data:
@@ -387,7 +397,7 @@
           when: hostvars[inventory_hostname].is_virtual | default(false)
           delegate_to: localhost
           netbox.netbox.netbox_virtual_machine:
-            netbox_url: "{{ nb_url | regex_replace('/+$','') | regex_replace('/api$','') }}"
+            netbox_url: "{{ nb_base }}"
             netbox_token: "{{ nb_token }}"
             validate_certs: "{{ nb_verify }}"
             data:
