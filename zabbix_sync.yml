@@ -3,8 +3,8 @@
   gather_facts: false
   vars:
     # Zabbix auth (prefer token). Provide via AWX Credentials/Env
-    zabbix_api_url: "{{ lookup('env', 'ZABBIX_API_URL') }}"
-    zabbix_api_token: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+    zbx_url: "{{ lookup('env', 'ZABBIX_API_URL') }}"
+    zbx_token: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
 
     # NetBox for writeback
     nb_url: "{{ lookup('env','NETBOX_API') }}"
