@@ -1,9 +1,5 @@
 plugin: netbox.netbox.nb_inventory
 
-api_endpoint: "{{ lookup('env', 'NETBOX_API') | default(omit) }}"
-token: "{{ lookup('env', 'NETBOX_TOKEN') | default(omit) }}"
-validate_certs: "{{ (lookup('env', 'NETBOX_VERIFY') | default('true')) | bool }}"
-
 config_context: false
 strict: false
 
