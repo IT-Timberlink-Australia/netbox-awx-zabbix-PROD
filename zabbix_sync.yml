@@ -33,21 +33,32 @@
       set_fact:
         zbx_scheme_https: "{{ zbx_url | regex_search('^https://') is truthy }}"
         zbx_hostport: "{{ (zbx_url | regex_replace('^https?://','')) | regex_replace('/.*$','') }}"
-        zbx_pathfull: "{{ '/' ~ (zbx_url | regex_replace('^https?://[^/]+','') | regex_replace('/+$','')) }}"
+        # path portion *without* protocol/host
+        zbx_path_only: "{{ zbx_url | regex_replace('^https?://[^/]+','') }}"
+        zbx_path_clean: "{{ zbx_path_only | regex_replace('/+$','') }}"
+        # if the URL already ends with api_jsonrpc.php, keep it; else append
         zbx_api: >-
           {{
-            (zbx_url | regex_replace('/api_jsonrpc\\.php/?$','') | regex_replace('/+$','')) ~ '/api_jsonrpc.php'
+            (zbx_url if (zbx_url | regex_search('/api_jsonrpc\\.php/?$'))
+            else (zbx_url | regex_replace('/+$','') ~ '/api_jsonrpc.php'))
           }}
         _auth: "{{ zbx_token }}"
 
     - name: Parse Zabbix URL (phase 2)
       set_fact:
+        # httpapi path should be the root web path (e.g. /zabbix), never the php
         zbx_pathroot: >-
           {{
-            (zbx_pathfull | regex_search('/api_jsonrpc\\.php/?$'))
-              | ternary( (zbx_pathfull | regex_replace('/api_jsonrpc\\.php/?$','') ),
-                        (zbx_pathfull) )
+            (zbx_path_clean | regex_replace('/api_jsonrpc\\.php$',''))
+            | regex_replace('^$','/')    # ensure at least '/'
           }}
+
+    - debug:
+        msg:
+          zbx_api: "{{ zbx_api }}"
+          zbx_hostport: "{{ zbx_hostport }}"
+          zbx_pathroot: "{{ zbx_pathroot }}"
+      verbosity: 1
 
     # ---------- NetBox URL normalize (accept base or /api) ----------
     - name: Normalize NetBox URL (clean)
@@ -215,6 +226,14 @@
                   else omit
               }}
 
+        - name: Build interface details (only for SNMP)
+          set_fact:
+            _iface_details: >-
+              {{
+                {'version': 2, 'community': '{$SNMP_COMMUNITY}', 'bulk': 1}
+                if (_iface_type | int) == 2 else omit
+              }}
+
         # --- Ensure host present via community.zabbix.zabbix_host ---
         - name: Ensure host present (create/update) with base attributes
           community.zabbix.zabbix_host:
@@ -232,6 +251,7 @@
                 ip: "{{ _iface_ip }}"
                 dns: ""
                 port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
+                details: "{{ _iface_details | default(omit) }}"
           vars:
             ansible_network_os: community.zabbix.zabbix
             ansible_connection: httpapi
@@ -309,6 +329,7 @@
                     ip: "{{ _iface_ip }}"
                     dns: ""
                     port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
+                    details: "{{ _iface_details | default(omit) }}"
                   auth: "{{ _auth }}"
                   id: 7
 
