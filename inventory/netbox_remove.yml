@@ -3,10 +3,17 @@ plugin: netbox.netbox.nb_inventory
 config_context: false
 strict: false
 
+
+# Only hosts pending offboarding
 query_filters:
-  - cf_zbp_status: "Remove Pending"
+- cf_zbp_status: "Remove Pending"
+
 
 compose:
-  host_name: name
-  zbx_proxy_id: custom_fields.zbp_proxy_id
-  # add anything else you need for the removal task
+zbx_status: custom_fields.zbp_status
+
+
+keyed_groups:
+- key: "{{ zbx_status | default('unknown') | lower | regex_replace('[^a-z0-9]+','_') }}"
+prefix: status
+separator: "_"
