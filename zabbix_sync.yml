@@ -1,19 +1,27 @@
 - name: Sync NetBox hosts into Zabbix (idempotent, no zabbix_api)
-  hosts: BEL-01AP01
-  connection: local   
+  hosts: all
+  connection: local
   gather_facts: false
   vars:
     # Zabbix auth (prefer token). Provide via AWX Credentials/Env
-    zbx_url: "{{ lookup('env', 'ZABBIX_API_URL') }}"
-    zbx_token: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+    zbx_url: "{{ lookup('env','ZABBIX_URL') }}"
+    zbx_token: "{{ lookup('env','ZABBIX_TOKEN') | default('') }}"
+    zbx_user: "{{ lookup('env','ZABBIX_USER') | default('') }}"
+    zbx_password: "{{ lookup('env','ZABBIX_PASSWORD') | default('') }}"
 
     # NetBox for writeback
     nb_url: "{{ lookup('env','NETBOX_API') }}"
     nb_token: "{{ lookup('env','NETBOX_TOKEN') }}"
     nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('true')) | bool }}"
 
-    # API endpoint & defaults
-    zbx_api: "{{ zbx_url | regex_replace('/+$','') }}/api_jsonrpc.php"
+    # Build the Zabbix JSON-RPC endpoint safely (works with or without trailing api_jsonrpc.php)
+    zbx_api: >-
+      {{
+        (zbx_url | regex_search('api_jsonrpc\\.php/?$'))
+          | ternary((zbx_url | regex_replace('/+$','')),
+                    (zbx_url | regex_replace('/+$','') ~ '/api_jsonrpc.php'))
+      }}
+
     _iface_default_ports:
       "1": "10050"   # Agent
       "2": "161"     # SNMP
@@ -52,6 +60,34 @@
     - name: Set API auth token
       set_fact:
         _auth: "{{ (zbx_token if zbx_token|length>0 else _login.json.result) }}"
+
+    # --- Probe NetBox custom fields so write-back only sends keys that exist ---
+    - name: Probe NetBox CF zbp_last_sync
+      uri:
+        url: "{{ nb_url | regex_replace('/+$','') }}/extras/custom-fields/?name=zbp_last_sync"
+        method: GET
+        headers:
+          Authorization: "Token {{ nb_token }}"
+        return_content: true
+        status_code: 200
+        validate_certs: "{{ nb_verify }}"
+      register: _probe_last_sync
+
+    - name: Probe NetBox CF zbp_sync_hint
+      uri:
+        url: "{{ nb_url | regex_replace('/+$','') }}/extras/custom-fields/?name=zbp_sync_hint"
+        method: GET
+        headers:
+          Authorization: "Token {{ nb_token }}"
+        return_content: true
+        status_code: 200
+        validate_certs: "{{ nb_verify }}"
+      register: _probe_sync_hint
+
+    - name: Set CF presence flags
+      set_fact:
+        _has_last_sync: "{{ (_probe_last_sync.json.results | default([]) | length) > 0 }}"
+        _has_sync_hint: "{{ (_probe_sync_hint.json.results | default([]) | length) > 0 }}"
 
     - name: Normalize host vars from NetBox
       vars:
@@ -165,7 +201,7 @@
               jsonrpc: "2.0"
               method: "proxy.get"
               params:
-                output: [ "proxyid", "host" ]
+                output: [ "proxyid", "name" ]
                 proxyids: [ "{{ _proxy_id_int }}" ]
               auth: "{{ _auth }}"
               id: 4
@@ -175,7 +211,12 @@
           set_fact:
             _group_names: "{{ (_grp.json.result | map(attribute='name') | list) | default([]) }}"
             _template_names: "{{ (_tmpl.json.result | map(attribute='host') | list) | default([]) }}"
-            _proxy_name: "{{ (_prox.json.result[0].host) if (_prox is defined and _prox.json.result | length > 0) else omit }}"
+            _proxy_name: >-
+              {{
+                (_prox.json.result[0].name)
+                  if (_prox is defined and (_prox.json.result | default([]) | length) > 0)
+                  else omit
+              }}
 
         # --- Ensure host present via community.zabbix.zabbix_host ---
         - name: Ensure host present (create/update) with base attributes
@@ -313,7 +354,16 @@
               auth: "{{ _auth }}"
               id: 8
 
-        # --- Success writeback to NetBox ---
+        # --- Build writeback dicts based on available CFs ---
+        - name: Build success custom_fields payload
+          set_fact:
+            _cf_success: >-
+              {{
+                {'zbp_status':'Synced'}
+                | combine( (_has_last_sync | bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)
+                | combine( (_has_sync_hint | bool) | ternary({'zbp_sync_hint': ''}, {}),           recursive=True)
+              }}
+
         - name: Success writeback → NetBox (Device)
           when: not (hostvars[inventory_hostname].is_virtual | default(false))
           delegate_to: localhost
@@ -323,10 +373,7 @@
             validate_certs: "{{ nb_verify }}"
             data:
               name: "{{ _nb_name }}"
-              custom_fields:
-                zbp_status: "Synced"
-                zbp_last_sync: "{{ lookup('pipe','date -Is') }}"
-                zbp_sync_hint: ""
+              custom_fields: "{{ _cf_success }}"
             state: present
 
         - name: Success writeback → NetBox (VM)
@@ -338,16 +385,21 @@
             validate_certs: "{{ nb_verify }}"
             data:
               name: "{{ _nb_name }}"
-              custom_fields:
-                zbp_status: "Synced"
-                zbp_last_sync: "{{ lookup('pipe','date -Is') }}"
-                zbp_sync_hint: ""
+              custom_fields: "{{ _cf_success }}"
             state: present
 
       rescue:
         - name: Capture error message
           set_fact:
             _sync_err: "{{ ansible_failed_result.msg | default('Zabbix sync failed') }}"
+
+        - name: Build failure custom_fields payload
+          set_fact:
+            _cf_fail: >-
+              {{
+                {'zbp_status':'Not Synced'}
+                | combine( (_has_sync_hint | bool) | ternary({'zbp_sync_hint': _sync_err}, {}), recursive=True)
+              }}
 
         - name: Failure writeback → NetBox (Device)
           when: not (hostvars[inventory_hostname].is_virtual | default(false))
@@ -358,9 +410,7 @@
             validate_certs: "{{ nb_verify }}"
             data:
               name: "{{ _nb_name }}"
-              custom_fields:
-                zbp_status: "Not Synced"
-                zbp_sync_hint: "{{ _sync_err }}"
+              custom_fields: "{{ _cf_fail }}"
             state: present
 
         - name: Failure writeback → NetBox (VM)
@@ -372,7 +422,5 @@
             validate_certs: "{{ nb_verify }}"
             data:
               name: "{{ _nb_name }}"
-              custom_fields:
-                zbp_status: "Not Synced"
-                zbp_sync_hint: "{{ _sync_err }}"
+              custom_fields: "{{ _cf_fail }}"
             state: present
