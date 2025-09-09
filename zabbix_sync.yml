@@ -2,27 +2,24 @@
   hosts: all
   gather_facts: false
   vars:
-    # Zabbix auth (prefer token). Provide via AWX Credentials/Env
     zbx_url: "{{ lookup('env', 'ZABBIX_URL') }}"
     zbx_token: "{{ lookup('env', 'ZABBIX_TOKEN') | default('') }}"
     zbx_user: "{{ lookup('env', 'ZABBIX_USER') | default('') }}"
     zbx_password: "{{ lookup('env', 'ZABBIX_PASSWORD') | default('') }}"
 
-    # NetBox for writeback
     nb_url: "{{ lookup('env','NETBOX_API') }}"
     nb_token: "{{ lookup('env','NETBOX_TOKEN') }}"
     nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('true')) | bool }}"
 
-    # Default ports per interface type (Zabbix API expects a string)
     _iface_default_ports:
       "1": "10050"   # Agent
       "2": "161"     # SNMP
       "3": "623"     # IPMI
-      "4": "12345"   # JMX (typical)
+      "4": "12345"   # JMX
 
   tasks:
     - name: Validate Zabbix URL is provided
-    - assert:
+      assert:
         that:
           - zbx_url is string
           - zbx_url | length > 0
@@ -54,7 +51,7 @@
         _desired_template_ids: >-
           {{ ([ _tmpl_primary_id ] if _tmpl_primary_id | length > 0 else []) | union(_tmpl_extra_ids | map('string') | list) | unique }}
 
-    - name: Fail fast if key inputs are missing (plugin should ensure readiness already)
+    - name: Fail fast if key inputs are missing
       assert:
         that:
           - _iface_ip | length > 0
@@ -115,16 +112,12 @@
     - block:
         - name: Ensure host present (create if missing) with base attributes
           community.zabbix.zabbix_host:
-            server_url: "{{ zbx_url }}"
-            token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
-            login_user: "{{ zbx_user if (zbx_token | length == 0) else omit }}"
-            login_password: "{{ zbx_password if (zbx_token | length == 0) else omit }}"
-            host: "{{ _nb_name }}"
-            name: "{{ _nb_visible }}"
+            host_name: "{{ _nb_name }}"
+            visible_name: "{{ _nb_visible }}"
             state: present
             status: enabled
-            groups: "{{ _group_names }}"
-            templates: "{{ _template_names }}"
+            host_groups: "{{ _group_names }}"
+            link_templates: "{{ _template_names }}"
             proxy: "{{ _proxy_name | default(omit) }}"
             interfaces:
               - type: "{{ _iface_type | int }}"
@@ -133,8 +126,17 @@
                 ip: "{{ _iface_ip }}"
                 dns: ""
                 port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
+          vars:
+            ansible_network_os: community.zabbix.zabbix
+            ansible_connection: httpapi
+            ansible_httpapi_use_ssl: "{{ zbx_url | regex_search('^https://') is truthy }}"
+            ansible_httpapi_validate_certs: false
+            ansible_host: "{{ zbx_url | regex_replace('^https?://','') | regex_replace('/+$','') }}"
+            ansible_zabbix_auth_key: "{{ zbx_token | default(omit) }}"
+            ansible_httpapi_pass: "{{ zbx_password | default(omit) }}"
+            ansible_user: "{{ zbx_user | default(omit) }}"
 
-        - name: Fetch hostid & current templates/tags/interfaces
+        - name: Fetch hostid & current state (for tags/interface reconcile)
           community.zabbix.zabbix_api:
             server_url: "{{ zbx_url }}"
             token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
@@ -143,61 +145,17 @@
             method: host.get
             params:
               output: [ "hostid", "host", "name" ]
-              selectParentTemplates: [ "templateid", "host" ]
               selectTags: [ "tag", "value" ]
               selectInterfaces: [ "interfaceid", "type", "ip", "main" ]
               filter:
                 host: [ "{{ _nb_name }}" ]
           register: _hostget
 
-        - name: Set hostid and current state facts
+        - name: Set hostid and current tags/interfaces
           set_fact:
             _hostid: "{{ _hostget.result[0].hostid }}"
-            _cur_templates: "{{ _hostget.result[0].parentTemplates | default([]) }}"
             _cur_tags: "{{ _hostget.result[0].tags | default([]) }}"
             _cur_ifaces: "{{ _hostget.result[0].interfaces | default([]) }}"
-
-        - name: Compute template deltas (replace set)
-          vars:
-            _cur_ids: "{{ _cur_templates | map(attribute='templateid') | map('int') | list }}"
-          set_fact:
-            _tmpl_to_link: "{{ _tmpl_ids_int | difference(_cur_ids) }}"
-            _tmpl_to_clear: "{{ _cur_ids | difference(_tmpl_ids_int) }}"
-
-        - name: Apply template links and unlinks (no clear)
-          when: _tmpl_to_link | length > 0 or _tmpl_to_clear | length > 0
-          community.zabbix.zabbix_api:
-            server_url: "{{ zbx_url }}"
-            token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
-            login_user: "{{ zbx_user if (zbx_token | length == 0) else omit }}"
-            login_password: "{{ zbx_password if (zbx_token | length == 0) else omit }}"
-            method: host.update
-            params:
-              hostid: "{{ _hostid }}"
-              templates: "{{ _tmpl_ids_int | map('regex_replace','^(.*)$','{"templateid": "\u0031"}') | map('from_json') | list }}"
-              templates_clear: "{{ _tmpl_to_clear | map('regex_replace','^(.*)$','{"templateid": "\u0031"}') | map('from_json') | list }}"
-
-        - name: Replace groups exactly (IDs)
-          community.zabbix.zabbix_api:
-            server_url: "{{ zbx_url }}"
-            token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
-            login_user: "{{ zbx_user if (zbx_token | length == 0) else omit }}"
-            login_password: "{{ zbx_password if (zbx_token | length == 0) else omit }}"
-            method: host.update
-            params:
-              hostid: "{{ _hostid }}"
-              groups: "{{ _group_ids_int | map('regex_replace','^(.*)$','{"groupid": "\u0031"}') | map('from_json') | list }}"
-
-        - name: Ensure proxy assignment (or detach)
-          community.zabbix.zabbix_api:
-            server_url: "{{ zbx_url }}"
-            token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
-            login_user: "{{ zbx_user if (zbx_token | length == 0) else omit }}"
-            login_password: "{{ zbx_password if (zbx_token | length == 0) else omit }}"
-            method: host.update
-            params:
-              hostid: "{{ _hostid }}"
-              proxy_hostid: "{{ (_proxy_id_int | string) if (_proxy_id_int | int > 0) else "0" }}"
 
         - name: Ensure only one primary interface with correct type and IP
           vars:
@@ -244,7 +202,7 @@
             merged: "{{ cur_map | combine({ item.tag: item.value }, recursive=True) }}"
           set_fact:
             _merged_tags: >-
-              {{ merged | dict2items(key_name='tag', value_name='value') | map('regex_replace','^(.*)$','{"tag": "\u0031", "value": "\u0031"}') | map('from_json') | list }}
+              {{ merged | dict2items(key_name='tag', value_name='value') }}
           loop: "{{ filtered_desired }}"
           loop_control:
             loop_var: item
