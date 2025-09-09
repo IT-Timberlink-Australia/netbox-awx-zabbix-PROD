@@ -1,15 +1,13 @@
----
-- name: Sync NetBox hosts into Zabbix (idempotent, no zabbix_api)
+- name: Sync NetBox hosts into Zabbix (token-only)
   hosts: BEL-01AP01
   connection: local
   gather_facts: false
   vars:
-    # Zabbix auth via AWX env/credential
-    zbx_url:   "{{ lookup('env','ZABBIX_API_URL') }}"      # e.g. https://itmonitor.../zabbix  or .../zabbix/api_jsonrpc.php
+    # From AWX credentials / env
+    zbx_url:   "{{ lookup('env','ZABBIX_API_URL') }}"     # e.g. https://.../zabbix/api_jsonrpc.php
     zbx_token: "{{ lookup('env','ZABBIX_API_TOKEN') }}"
 
-    # NetBox API + auth via AWX env/credential
-    nb_url:    "{{ lookup('env','NETBOX_API') }}"          # must be API root, e.g. https://netbox.../api
+    nb_url:    "{{ lookup('env','NETBOX_API') }}"         # e.g. https://netbox.example OR .../api
     nb_token:  "{{ lookup('env','NETBOX_TOKEN') }}"
     nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('true')) | bool }}"
 
@@ -21,25 +19,14 @@
       "4": "12345"   # JMX
 
   tasks:
-    - name: Validate inputs
+    - name: Validate inputs present
       assert:
         that:
-          - zbx_url is string
-          - zbx_url | length > 0
-          - (zbx_token | length > 0) or ((zbx_user | length > 0) and (zbx_password | length > 0))
-          - nb_url is string
-          - nb_url | regex_search('/api/?$')
-        fail_msg: "Need ZABBIX_URL and either ZABBIX_TOKEN or ZABBIX_USER/PASS; NETBOX_API must be the API root (…/api)."
-
-    # Normalize NetBox URL when the cred gives the base host instead of the API root
-    - name: Normalize NetBox URL (clean)
-      set_fact:
-        _nb_clean: "{{ nb_url | regex_replace('/+$','') }}"
-
-    - name: Derive NetBox API root and base
-      set_fact:
-        nb_api_root: "{{ (_nb_clean | regex_search('/api$')) | ternary(_nb_clean, _nb_clean ~ '/api') }}"
-        nb_base:     "{{ _nb_clean | regex_replace('/api$','') }}"
+          - (zbx_url | length) > 0
+          - (zbx_token | length) > 0
+          - (nb_url | length) > 0
+          - (nb_token | length) > 0
+        fail_msg: "Missing ZABBIX_API_URL/ZABBIX_API_TOKEN or NETBOX_API/NETBOX_TOKEN."
 
     # ---------- Zabbix URL parsing (robust) ----------
     - name: Derive Zabbix connection components
@@ -57,32 +44,19 @@
           {{
             (zbx_url | regex_replace('/api_jsonrpc\\.php/?$','') | regex_replace('/+$','')) ~ '/api_jsonrpc.php'
           }}
+        _auth: "{{ zbx_token }}"
 
-    - name: Login (only if no token provided)
-      when: zbx_token | length == 0
-      uri:
-        url: "{{ zbx_api }}"
-        method: POST
-        body_format: json
-        return_content: true
-        status_code: 200
-        validate_certs: false
-        headers:
-          Content-Type: application/json-rpc
-        body:
-          jsonrpc: "2.0"
-          method: "user.login"
-          params:
-            user: "{{ zbx_user }}"
-            password: "{{ zbx_password }}"
-          id: 1
-      register: _login
-
-    - name: Set API auth token
+    # ---------- NetBox URL normalize (accept base or /api) ----------
+    - name: Normalize NetBox URL (clean)
       set_fact:
-        _auth: "{{ (zbx_token if zbx_token|length>0 else _login.json.result) }}"
+        _nb_clean: "{{ nb_url | regex_replace('/+$','') }}"
 
-    # ---------- Probe NetBox CFs using the API ----------
+    - name: Derive NetBox API root and base
+      set_fact:
+        nb_api_root: "{{ (_nb_clean | regex_search('/api$')) | ternary(_nb_clean, _nb_clean ~ '/api') }}"
+        nb_base:     "{{ _nb_clean | regex_replace('/api$','') }}"
+
+    # ---------- Probe NetBox CFs via API ----------
     - name: Probe NetBox CF zbp_last_sync
       uri:
         url: "{{ nb_api_root }}/extras/custom-fields/?name=zbp_last_sync"
@@ -167,7 +141,7 @@
         _group_ids_int: [ "{{ _group_id | int }}" ]
         _tmpl_ids_int: "{{ _desired_template_ids | map('int') | list }}"
 
-    # ---------- One proper block/rescue task ----------
+    # ---------- Zabbix host upsert + reconcile + writeback ----------
     - name: Zabbix host upsert + reconcile + NetBox writeback
       block:
 
@@ -263,8 +237,6 @@
             ansible_host: "{{ zbx_hostport }}"          # host[:port] only
             ansible_httpapi_path: "{{ zbx_pathroot }}"  # e.g. /zabbix (no api_jsonrpc.php)
             ansible_zabbix_auth_key: "{{ _auth }}"
-            ansible_user: "{{ (zbx_token | length > 0) | ternary(omit, zbx_user) }}"
-            ansible_httpapi_pass: "{{ (zbx_token | length > 0) | ternary(omit, zbx_password) }}"
 
         # --- Fetch current state (for precise reconciles) ---
         - name: Fetch hostid, tags, interfaces
@@ -422,7 +394,7 @@
           when: not (hostvars[inventory_hostname].is_virtual | default(false))
           delegate_to: localhost
           netbox.netbox.netbox_device:
-            netbox_url: "{{ nb_url | regex_replace('/+$','') | regex_replace('/api$','') }}"
+            netbox_url: "{{ nb_base }}"
             netbox_token: "{{ nb_token }}"
             validate_certs: "{{ nb_verify }}"
             data:
@@ -434,7 +406,7 @@
           when: hostvars[inventory_hostname].is_virtual | default(false)
           delegate_to: localhost
           netbox.netbox.netbox_virtual_machine:
-            netbox_url: "{{ nb_url | regex_replace('/+$','') | regex_replace('/api$','') }}"
+            netbox_url: "{{ nb_base }}"
             netbox_token: "{{ nb_token }}"
             validate_certs: "{{ nb_verify }}"
             data:
