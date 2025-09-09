@@ -3,15 +3,14 @@
   hosts: BEL-01AP01
   connection: local
   gather_facts: false
-  
   vars:
-    # Zabbix auth (prefer token). Provide via AWX Credentials/Env
-    zbx_url: "{{ lookup('env', 'ZABBIX_API_URL') }}"
-    zbx_token: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+    # Zabbix auth via AWX env/credential
+    zbx_url:   "{{ lookup('env','ZABBIX_API_URL') }}"      # e.g. https://itmonitor.../zabbix  or .../zabbix/api_jsonrpc.php
+    zbx_token: "{{ lookup('env','ZABBIX_API_TOKEN') }}"
 
-    # NetBox for writeback
-    nb_url: "{{ lookup('env','NETBOX_API') }}"
-    nb_token: "{{ lookup('env','NETBOX_TOKEN') }}"
+    # NetBox API + auth via AWX env/credential
+    nb_url:    "{{ lookup('env','NETBOX_API') }}"          # must be API root, e.g. https://netbox.../api
+    nb_token:  "{{ lookup('env','NETBOX_TOKEN') }}"
     nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('true')) | bool }}"
 
     # Default ports by interface type
@@ -73,7 +72,7 @@
       set_fact:
         _auth: "{{ (zbx_token if zbx_token|length>0 else _login.json.result) }}"
 
-    # ---------- Probe NetBox CFs using the API (not UI) ----------
+    # ---------- Probe NetBox CFs using the API ----------
     - name: Probe NetBox CF zbp_last_sync
       uri:
         url: "{{ nb_url | regex_replace('/+$','') }}/extras/custom-fields/?name=zbp_last_sync"
@@ -158,149 +157,12 @@
         _group_ids_int: [ "{{ _group_id | int }}" ]
         _tmpl_ids_int: "{{ _desired_template_ids | map('int') | list }}"
 
-    # ---------- Zabbix lookups + host upsert ----------
-    - name: Get host group names from IDs
-      uri:
-        url: "{{ zbx_api }}"
-        method: POST
-        body_format: json
-        return_content: true
-        validate_certs: false
-        headers: { Content-Type: application/json-rpc }
-        body:
-          jsonrpc: "2.0"
-          method: "hostgroup.get"
-          params:
-            output: [ "groupid", "name" ]
-            groupids: "{{ _group_ids_int }}"
-          auth: "{{ _auth }}"
-          id: 2
-      register: _grp
-
-    - name: Get template names from IDs
-      uri:
-        url: "{{ zbx_api }}"
-        method: POST
-        body_format: json
-        return_content: true
-        validate_certs: false
-        headers: { Content-Type: application/json-rpc }
-        body:
-          jsonrpc: "2.0"
-          method: "template.get"
-          params:
-            output: [ "templateid", "host" ]
-            templateids: "{{ _tmpl_ids_int }}"
-          auth: "{{ _auth }}"
-          id: 3
-      register: _tmpl
-
-    - name: Get proxy name (if any)
-      when: _proxy_id_int | int > 0
-      uri:
-        url: "{{ zbx_api }}"
-        method: POST
-        body_format: json
-        return_content: true
-        validate_certs: false
-        headers: { Content-Type: application/json-rpc }
-        body:
-          jsonrpc: "2.0"
-          method: "proxy.get"
-          params:
-            output: [ "proxyid", "name" ]
-            proxyids: [ "{{ _proxy_id_int }}" ]
-          auth: "{{ _auth }}"
-          id: 4
-      register: _prox
-
-    - name: Materialize names for module usage
-      set_fact:
-        _group_names: "{{ (_grp.json.result | map(attribute='name') | list) | default([]) }}"
-        _template_names: "{{ (_tmpl.json.result | map(attribute='host') | list) | default([]) }}"
-        _proxy_name: >-
-          {{
-            (_prox.json.result[0].name)
-              if (_prox is defined and (_prox.json.result | default([]) | length) > 0)
-              else omit
-          }}
-
-    - name: Ensure host present (create/update) with base attributes
-      community.zabbix.zabbix_host:
-        host_name: "{{ _nb_name }}"
-        visible_name: "{{ _nb_visible }}"
-        state: present
-        status: enabled
-        host_groups: "{{ _group_names }}"
-        link_templates: "{{ _template_names }}"
-        proxy: "{{ _proxy_name | default(omit) }}"
-        interfaces:
-          - type: "{{ _iface_type | int }}"
-            main: 1
-            useip: 1
-            ip: "{{ _iface_ip }}"
-            dns: ""
-            port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
-      vars:
-        ansible_network_os: community.zabbix.zabbix
-        ansible_connection: httpapi
-        ansible_httpapi_use_ssl: "{{ zbx_scheme_https }}"
-        ansible_httpapi_validate_certs: false
-        ansible_host: "{{ zbx_hostport }}"          # host[:port] only
-        ansible_httpapi_path: "{{ zbx_pathroot }}"  # e.g. /zabbix (no api_jsonrpc.php)
-        ansible_zabbix_auth_key: "{{ _auth }}"
-        ansible_user: "{{ (zbx_token | length > 0) | ternary(omit, zbx_user) }}"
-        ansible_httpapi_pass: "{{ (zbx_token | length > 0) | ternary(omit, zbx_password) }}"
-
-    - name: Fetch hostid, tags, interfaces
-      uri:
-        url: "{{ zbx_api }}"
-        method: POST
-        body_format: json
-        return_content: true
-        validate_certs: false
-        headers: { Content-Type: application/json-rpc }
-        body:
-          jsonrpc: "2.0"
-          method: "host.get"
-          params:
-            output: [ "hostid", "host", "name" ]
-            selectTags: [ "tag", "value" ]
-            selectInterfaces: [ "interfaceid", "type", "ip", "main" ]
-            filter:
-              host: [ "{{ _nb_name }}" ]
-          auth: "{{ _auth }}"
-          id: 5
-      register: _hostget
-
-    - name: Current host facts
-      set_fact:
-        _hostid: "{{ _hostget.json.result[0].hostid }}"
-        _cur_tags: "{{ _hostget.json.result[0].tags | default([]) }}"
-        _cur_ifaces: "{{ _hostget.json.result[0].interfaces | default([]) }}"
-
-    - name: Ensure only one primary interface with correct type and IP
-      vars:
-        _match: "{{ _cur_ifaces | selectattr('main','equalto','1') | selectattr('type','equalto', (_iface_type | int)) | selectattr('ip','equalto', _iface_ip) | list }}"
+    # ---------- One proper block/rescue task ----------
+    - name: Zabbix host upsert + reconcile + NetBox writeback
       block:
-        - name: Delete all existing interfaces if they don’t match
-          when: _match | length == 0 and _cur_ifaces | length > 0
-          uri:
-            url: "{{ zbx_api }}"
-            method: POST
-            body_format: json
-            return_content: true
-            validate_certs: false
-            headers: { Content-Type: application/json-rpc }
-            body:
-              jsonrpc: "2.0"
-              method: "hostinterface.delete"
-              params: "{{ _cur_ifaces | map(attribute='interfaceid') | list }}"
-              auth: "{{ _auth }}"
-              id: 6
 
-        - name: Create desired primary interface (if needed)
-          when: _match | length == 0
+        # --- Lookups via JSON-RPC (uri) ---
+        - name: Get host group names from IDs
           uri:
             url: "{{ zbx_api }}"
             method: POST
@@ -310,118 +172,262 @@
             headers: { Content-Type: application/json-rpc }
             body:
               jsonrpc: "2.0"
-              method: "hostinterface.create"
+              method: "hostgroup.get"
               params:
-                hostid: "{{ _hostid }}"
+                output: [ "groupid", "name" ]
+                groupids: "{{ _group_ids_int }}"
+              auth: "{{ _auth }}"
+              id: 2
+          register: _grp
+
+        - name: Get template names from IDs
+          uri:
+            url: "{{ zbx_api }}"
+            method: POST
+            body_format: json
+            return_content: true
+            validate_certs: false
+            headers: { Content-Type: application/json-rpc }
+            body:
+              jsonrpc: "2.0"
+              method: "template.get"
+              params:
+                output: [ "templateid", "host" ]
+                templateids: "{{ _tmpl_ids_int }}"
+              auth: "{{ _auth }}"
+              id: 3
+          register: _tmpl
+
+        - name: Get proxy name (if any)
+          when: _proxy_id_int | int > 0
+          uri:
+            url: "{{ zbx_api }}"
+            method: POST
+            body_format: json
+            return_content: true
+            validate_certs: false
+            headers: { Content-Type: application/json-rpc }
+            body:
+              jsonrpc: "2.0"
+              method: "proxy.get"
+              params:
+                output: [ "proxyid", "name" ]
+                proxyids: [ "{{ _proxy_id_int }}" ]
+              auth: "{{ _auth }}"
+              id: 4
+          register: _prox
+
+        - name: Materialize names for module usage
+          set_fact:
+            _group_names: "{{ (_grp.json.result | map(attribute='name') | list) | default([]) }}"
+            _template_names: "{{ (_tmpl.json.result | map(attribute='host') | list) | default([]) }}"
+            _proxy_name: >-
+              {{
+                (_prox.json.result[0].name)
+                  if (_prox is defined and (_prox.json.result | default([]) | length) > 0)
+                  else omit
+              }}
+
+        # --- Ensure host present via community.zabbix.zabbix_host ---
+        - name: Ensure host present (create/update) with base attributes
+          community.zabbix.zabbix_host:
+            host_name: "{{ _nb_name }}"
+            visible_name: "{{ _nb_visible }}"
+            state: present
+            status: enabled
+            host_groups: "{{ _group_names }}"
+            link_templates: "{{ _template_names }}"
+            proxy: "{{ _proxy_name | default(omit) }}"
+            interfaces:
+              - type: "{{ _iface_type | int }}"
                 main: 1
-                type: "{{ _iface_type | int }}"
                 useip: 1
                 ip: "{{ _iface_ip }}"
                 dns: ""
                 port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
+          vars:
+            ansible_network_os: community.zabbix.zabbix
+            ansible_connection: httpapi
+            ansible_httpapi_use_ssl: "{{ zbx_scheme_https }}"
+            ansible_httpapi_validate_certs: false
+            ansible_host: "{{ zbx_hostport }}"          # host[:port] only
+            ansible_httpapi_path: "{{ zbx_pathroot }}"  # e.g. /zabbix (no api_jsonrpc.php)
+            ansible_zabbix_auth_key: "{{ _auth }}"
+            ansible_user: "{{ (zbx_token | length > 0) | ternary(omit, zbx_user) }}"
+            ansible_httpapi_pass: "{{ (zbx_token | length > 0) | ternary(omit, zbx_password) }}"
+
+        # --- Fetch current state (for precise reconciles) ---
+        - name: Fetch hostid, tags, interfaces
+          uri:
+            url: "{{ zbx_api }}"
+            method: POST
+            body_format: json
+            return_content: true
+            validate_certs: false
+            headers: { Content-Type: application/json-rpc }
+            body:
+              jsonrpc: "2.0"
+              method: "host.get"
+              params:
+                output: [ "hostid", "host", "name" ]
+                selectTags: [ "tag", "value" ]
+                selectInterfaces: [ "interfaceid", "type", "ip", "main" ]
+                filter:
+                  host: [ "{{ _nb_name }}" ]
               auth: "{{ _auth }}"
-              id: 7
+              id: 5
+          register: _hostget
 
-    - name: Merge/ensure tags (cmdb=true, environment/os/site/sla/nb_status)
-      vars:
-        desired:
-          - { tag: cmdb, value: "true" }
-          - { tag: environment, value: "{{ _tag_env }}" }
-          - { tag: os, value: "{{ _tag_os }}" }
-          - { tag: site, value: "{{ _tag_site }}" }
-          - { tag: sla, value: "{{ _tag_sla }}" }
-          - { tag: nb_status, value: "{{ _tag_nb_status }}" }
-        filtered_desired: "{{ desired | selectattr('value','string') | selectattr('value','!=','') | list }}"
-        cur_map: "{{ dict((_cur_tags | map(attribute='tag') | list) | zip(_cur_tags | map(attribute='value') | list)) }}"
-        desired_map: "{{ dict(filtered_desired | map(attribute='tag') | list | zip(filtered_desired | map(attribute='value') | list)) }}"
-        merged_map: "{{ cur_map | combine(desired_map, recursive=True) }}"
-        _merged_tags: "{{ merged_map | dict2items(key_name='tag', value_name='value') }}"
-      set_fact:
-        _merged_tags: "{{ _merged_tags }}"
+        - name: Current host facts
+          set_fact:
+            _hostid: "{{ _hostget.json.result[0].hostid }}"
+            _cur_tags: "{{ _hostget.json.result[0].tags | default([]) }}"
+            _cur_ifaces: "{{ _hostget.json.result[0].interfaces | default([]) }}"
 
-    - name: Apply merged tags
-      uri:
-        url: "{{ zbx_api }}"
-        method: POST
-        body_format: json
-        return_content: true
-        validate_certs: false
-        headers: { Content-Type: application/json-rpc }
-        body:
-          jsonrpc: "2.0"
-          method: "host.update"
-          params:
-            hostid: "{{ _hostid }}"
-            tags: "{{ _merged_tags }}"
-          auth: "{{ _auth }}"
-          id: 8
+        - name: Ensure only one primary interface with correct type and IP
+          vars:
+            _match: "{{ _cur_ifaces | selectattr('main','equalto','1') | selectattr('type','equalto', (_iface_type | int)) | selectattr('ip','equalto', _iface_ip) | list }}"
+          block:
+            - name: Delete all existing interfaces if they don’t match
+              when: _match | length == 0 and _cur_ifaces | length > 0
+              uri:
+                url: "{{ zbx_api }}"
+                method: POST
+                body_format: json
+                return_content: true
+                validate_certs: false
+                headers: { Content-Type: application/json-rpc }
+                body:
+                  jsonrpc: "2.0"
+                  method: "hostinterface.delete"
+                  params: "{{ _cur_ifaces | map(attribute='interfaceid') | list }}"
+                  auth: "{{ _auth }}"
+                  id: 6
 
-    - name: Build success custom_fields payload
-      set_fact:
-        _cf_success: >-
-          {{
-            {'zbp_status':'Synced'}
-            | combine( (_has_last_sync | bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)
-            | combine( (_has_sync_hint | bool) | ternary({'zbp_sync_hint': ''}, {}),           recursive=True)
-          }}
+            - name: Create desired primary interface (if needed)
+              when: _match | length == 0
+              uri:
+                url: "{{ zbx_api }}"
+                method: POST
+                body_format: json
+                return_content: true
+                validate_certs: false
+                headers: { Content-Type: application/json-rpc }
+                body:
+                  jsonrpc: "2.0"
+                  method: "hostinterface.create"
+                  params:
+                    hostid: "{{ _hostid }}"
+                    main: 1
+                    type: "{{ _iface_type | int }}"
+                    useip: 1
+                    ip: "{{ _iface_ip }}"
+                    dns: ""
+                    port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
+                  auth: "{{ _auth }}"
+                  id: 7
 
-    - name: Success writeback → NetBox (Device)
-      when: not (hostvars[inventory_hostname].is_virtual | default(false))
-      delegate_to: localhost
-      netbox.netbox.netbox_device:
-        netbox_url: "{{ nb_url | regex_replace('/+$','') | regex_replace('/api$','') }}"
-        netbox_token: "{{ nb_token }}"
-        validate_certs: "{{ nb_verify }}"
-        data:
-          name: "{{ _nb_name }}"
-          custom_fields: "{{ _cf_success }}"
-        state: present
+        - name: Merge/ensure tags (cmdb=true, environment/os/site/sla/nb_status)
+          vars:
+            desired:
+              - { tag: cmdb, value: "true" }
+              - { tag: environment, value: "{{ _tag_env }}" }
+              - { tag: os, value: "{{ _tag_os }}" }
+              - { tag: site, value: "{{ _tag_site }}" }
+              - { tag: sla, value: "{{ _tag_sla }}" }
+              - { tag: nb_status, value: "{{ _tag_nb_status }}" }
+            filtered_desired: "{{ desired | selectattr('value','string') | selectattr('value','!=','') | list }}"
+            cur_map: "{{ dict((_cur_tags | map(attribute='tag') | list) | zip(_cur_tags | map(attribute='value') | list)) }}"
+            desired_map: "{{ dict(filtered_desired | map(attribute='tag') | list | zip(filtered_desired | map(attribute='value') | list)) }}"
+            merged_map: "{{ cur_map | combine(desired_map, recursive=True) }}"
+            _merged_tags: "{{ merged_map | dict2items(key_name='tag', value_name='value') }}"
+          set_fact:
+            _merged_tags: "{{ _merged_tags }}"
 
-    - name: Success writeback → NetBox (VM)
-      when: hostvars[inventory_hostname].is_virtual | default(false)
-      delegate_to: localhost
-      netbox.netbox.netbox_virtual_machine:
-        netbox_url: "{{ nb_url | regex_replace('/+$','') | regex_replace('/api$','') }}"
-        netbox_token: "{{ nb_token }}"
-        validate_certs: "{{ nb_verify }}"
-        data:
-          name: "{{ _nb_name }}"
-          custom_fields: "{{ _cf_success }}"
-        state: present
+        - name: Apply merged tags
+          uri:
+            url: "{{ zbx_api }}"
+            method: POST
+            body_format: json
+            return_content: true
+            validate_certs: false
+            headers: { Content-Type: application/json-rpc }
+            body:
+              jsonrpc: "2.0"
+              method: "host.update"
+              params:
+                hostid: "{{ _hostid }}"
+                tags: "{{ _merged_tags }}"
+              auth: "{{ _auth }}"
+              id: 8
 
-  rescue:
-    - name: Capture error message
-      set_fact:
-        _sync_err: "{{ ansible_failed_result.msg | default('Zabbix sync failed') }}"
+        # --- Build success payload & write back to NetBox ---
+        - name: Build success custom_fields payload
+          set_fact:
+            _cf_success: >-
+              {{
+                {'zbp_status':'Synced'}
+                | combine( (_has_last_sync | bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)
+                | combine( (_has_sync_hint | bool) | ternary({'zbp_sync_hint': ''}, {}),           recursive=True)
+              }}
 
-    - name: Build failure custom_fields payload
-      set_fact:
-        _cf_fail: >-
-          {{
-            {'zbp_status':'Not Synced'}
-            | combine( (_has_sync_hint | bool) | ternary({'zbp_sync_hint': _sync_err}, {}), recursive=True)
-          }}
+        - name: Success writeback → NetBox (Device)
+          when: not (hostvars[inventory_hostname].is_virtual | default(false))
+          delegate_to: localhost
+          netbox.netbox.netbox_device:
+            netbox_url: "{{ nb_url | regex_replace('/+$','') | regex_replace('/api$','') }}"
+            netbox_token: "{{ nb_token }}"
+            validate_certs: "{{ nb_verify }}"
+            data:
+              name: "{{ _nb_name }}"
+              custom_fields: "{{ _cf_success }}"
+            state: present
 
-    - name: Failure writeback → NetBox (Device)
-      when: not (hostvars[inventory_hostname].is_virtual | default(false))
-      delegate_to: localhost
-      netbox.netbox.netbox_device:
-        netbox_url: "{{ nb_url | regex_replace('/+$','') | regex_replace('/api$','') }}"
-        netbox_token: "{{ nb_token }}"
-        validate_certs: "{{ nb_verify }}"
-        data:
-          name: "{{ _nb_name }}"
-          custom_fields: "{{ _cf_fail }}"
-        state: present
+        - name: Success writeback → NetBox (VM)
+          when: hostvars[inventory_hostname].is_virtual | default(false)
+          delegate_to: localhost
+          netbox.netbox.netbox_virtual_machine:
+            netbox_url: "{{ nb_url | regex_replace('/+$','') | regex_replace('/api$','') }}"
+            netbox_token: "{{ nb_token }}"
+            validate_certs: "{{ nb_verify }}"
+            data:
+              name: "{{ _nb_name }}"
+              custom_fields: "{{ _cf_success }}"
+            state: present
 
-    - name: Failure writeback → NetBox (VM)
-      when: hostvars[inventory_hostname].is_virtual | default(false)
-      delegate_to: localhost
-      netbox.netbox.netbox_virtual_machine:
-        netbox_url: "{{ nb_url | regex_replace('/+$','') | regex_replace('/api$','') }}"
-        netbox_token: "{{ nb_token }}"
-        validate_certs: "{{ nb_verify }}"
-        data:
-          name: "{{ _nb_name }}"
-          custom_fields: "{{ _cf_fail }}"
-        state: present
+      rescue:
+        - name: Capture error message
+          set_fact:
+            _sync_err: "{{ ansible_failed_result.msg | default('Zabbix sync failed') }}"
+
+        - name: Build failure custom_fields payload
+          set_fact:
+            _cf_fail: >-
+              {{
+                {'zbp_status':'Not Synced'}
+                | combine( (_has_sync_hint | bool) | ternary({'zbp_sync_hint': _sync_err}, {}), recursive=True)
+              }}
+
+        - name: Failure writeback → NetBox (Device)
+          when: not (hostvars[inventory_hostname].is_virtual | default(false))
+          delegate_to: localhost
+          netbox.netbox.netbox_device:
+            netbox_url: "{{ nb_url | regex_replace('/+$','') | regex_replace('/api$','') }}"
+            netbox_token: "{{ nb_token }}"
+            validate_certs: "{{ nb_verify }}"
+            data:
+              name: "{{ _nb_name }}"
+              custom_fields: "{{ _cf_fail }}"
+            state: present
+
+        - name: Failure writeback → NetBox (VM)
+          when: hostvars[inventory_hostname].is_virtual | default(false)
+          delegate_to: localhost
+          netbox.netbox.netbox_virtual_machine:
+            netbox_url: "{{ nb_url | regex_replace('/+$','') | regex_replace('/api$','') }}"
+            netbox_token: "{{ nb_token }}"
+            validate_certs: "{{ nb_verify }}"
+            data:
+              name: "{{ _nb_name }}"
+              custom_fields: "{{ _cf_fail }}"
+            state: present
