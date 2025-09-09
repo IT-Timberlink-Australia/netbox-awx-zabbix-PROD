@@ -3,28 +3,21 @@ plugin: netbox.netbox.nb_inventory
 config_context: false
 strict: false
 
-# Only hosts ready to sync
 query_filters:
 - cf_zbp_status: "Not Synced"
 
-
-# Compose a clean status var to group on
 compose:
 zbx_status: custom_fields.zbp_status
-
-
-# Disable any default groupings (keep only status)
-# (If you previously had keyed_groups for site/proxy/etc., remove them.)
-keyed_groups:
-- key: "{{ zbx_status | default('unknown') | lower | regex_replace('[^a-z0-9]+','_') }}"
-prefix: status
-separator: "_"
-
-
-# (Optional) ensure hostnames/vars you use elsewhere remain composed
-# host_name: name
+# Optional: keep these if used by your plays
 # host_ip: >-
 # {{ custom_fields.zbp_int_ip | default(primary_ip4.address | default('') | regex_replace('/\\d+$','')) }}
-# primary_template_id: custom_fields.zbp_pri_template_name_id
-# template_interface_id: custom_fields.zbp_pri_template_int_id
-# ...
+
+
+# Group by *aliased* status string
+keyed_groups:
+- key: >-
+{{
+(zbx_status == 'Not Synced') | ternary('ready', zbx_status | lower | regex_replace('[^a-z0-9]+','_'))
+}}
+prefix: status
+separator: _
