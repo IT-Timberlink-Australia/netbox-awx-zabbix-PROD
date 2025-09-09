@@ -29,22 +29,25 @@
         fail_msg: "Missing ZABBIX_API_URL/ZABBIX_API_TOKEN or NETBOX_API/NETBOX_TOKEN."
 
     # ---------- Zabbix URL parsing (robust) ----------
-    - name: Derive Zabbix connection components
+    - name: Parse Zabbix URL (phase 1)
       set_fact:
         zbx_scheme_https: "{{ zbx_url | regex_search('^https://') is truthy }}"
         zbx_hostport: "{{ (zbx_url | regex_replace('^https?://','')) | regex_replace('/.*$','') }}"
         zbx_pathfull: "{{ '/' ~ (zbx_url | regex_replace('^https?://[^/]+','') | regex_replace('/+$','')) }}"
-        zbx_pathroot: >-
-          {{
-            (zbx_pathfull | regex_search('/api_jsonrpc\\.php/?$'))
-              | ternary( (zbx_pathfull | regex_replace('/api_jsonrpc\\.php/?$','') ),
-                         (zbx_pathfull) )
-          }}
         zbx_api: >-
           {{
             (zbx_url | regex_replace('/api_jsonrpc\\.php/?$','') | regex_replace('/+$','')) ~ '/api_jsonrpc.php'
           }}
         _auth: "{{ zbx_token }}"
+
+    - name: Parse Zabbix URL (phase 2)
+      set_fact:
+        zbx_pathroot: >-
+          {{
+            (zbx_pathfull | regex_search('/api_jsonrpc\\.php/?$'))
+              | ternary( (zbx_pathfull | regex_replace('/api_jsonrpc\\.php/?$','') ),
+                        (zbx_pathfull) )
+          }}
 
     # ---------- NetBox URL normalize (accept base or /api) ----------
     - name: Normalize NetBox URL (clean)
