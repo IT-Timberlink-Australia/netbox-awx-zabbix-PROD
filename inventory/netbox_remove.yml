@@ -3,13 +3,12 @@ plugin: netbox.netbox.nb_inventory
 config_context: false
 strict: false
 
+# Only hosts pending removal
 query_filters:
 - cf_zbp_status: "Remove Pending"
 
 compose:
 zbx_status: custom_fields.zbp_status
 
-keyed_groups:
-- key: "{{ 'ready' if (zbx_status | default('')) == 'Not Synced' else (zbx_status | default('unknown') | lower | regex_replace('[^a-z0-9]+','_')) }}"
-prefix: status
-separator: _
+groups:
+status_remove_pending: "{{ zbx_status == 'Remove Pending' }}"

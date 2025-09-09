@@ -3,13 +3,14 @@ plugin: netbox.netbox.nb_inventory
 config_context: false
 strict: false
 
+# Only hosts ready to sync
 query_filters:
 - cf_zbp_status: "Not Synced"
 
 compose:
 zbx_status: custom_fields.zbp_status
 
-keyed_groups:
-- key: "{{ 'ready' if (zbx_status | default('')) == 'Not Synced' else (zbx_status | default('unknown') | lower | regex_replace('[^a-z0-9]+','_')) }}"
-prefix: status
-separator: _
+# Create a single, explicit status group
+# (No keyed_groups; this works across all plugin versions)
+groups:
+status_ready: "{{ zbx_status == 'Not Synced' }}"
