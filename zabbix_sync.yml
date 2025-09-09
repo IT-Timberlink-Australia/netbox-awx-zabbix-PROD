@@ -1,0 +1,324 @@
+- name: Sync NetBox hosts into Zabbix (idempotent)
+  hosts: all
+  gather_facts: false
+  vars:
+    # Zabbix auth (prefer token). Provide via AWX Credentials/Env
+    zbx_url: "{{ lookup('env', 'ZABBIX_URL') }}"
+    zbx_token: "{{ lookup('env', 'ZABBIX_TOKEN') | default('') }}"
+    zbx_user: "{{ lookup('env', 'ZABBIX_USER') | default('') }}"
+    zbx_password: "{{ lookup('env', 'ZABBIX_PASSWORD') | default('') }}"
+
+    # NetBox for writeback
+    nb_url: "{{ lookup('env','NETBOX_API') }}"
+    nb_token: "{{ lookup('env','NETBOX_TOKEN') }}"
+    nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('true')) | bool }}"
+
+    # Default ports per interface type (Zabbix API expects a string)
+    _iface_default_ports:
+      "1": "10050"   # Agent
+      "2": "161"     # SNMP
+      "3": "623"     # IPMI
+      "4": "12345"   # JMX (typical)
+
+  tasks:
+    - name: Validate Zabbix URL is provided
+    - assert:
+        that:
+          - zbx_url is string
+          - zbx_url | length > 0
+        fail_msg: "ZABBIX_URL env is required"
+
+    - name: Normalize host vars from NetBox
+      vars:
+        cf: "{{ hostvars[inventory_hostname].custom_fields | default({}) }}"
+      set_fact:
+        _nb_name: "{{ inventory_hostname }}"
+        _nb_visible: "{{ cf.zbp_vname | default(inventory_hostname) }}"
+        _tmpl_primary_id: "{{ (cf.zbp_pri_template_name_id | string) if (cf.zbp_pri_template_name_id is defined) else '' }}"
+        _tmpl_extra_ids_raw: "{{ cf.zb_extra_templates | default([]) }}"
+        _iface_type: "{{ (cf.zbp_pri_template_int_id | string) if (cf.zbp_pri_template_int_id is defined) else '' }}"
+        _iface_ip: "{{ cf.zbp_int_ip | default('') }}"
+        _proxy_id: "{{ (cf.zbp_proxy_id | string) if (cf.zbp_proxy_id is defined) else '' }}"
+        _group_id: "{{ (cf.zbp_group_id | string) if (cf.zbp_group_id is defined) else '' }}"
+        _tag_env: "{{ cf.zb_mon_env | default('') }}"
+        _tag_os: "{{ cf.zbp_platform | default('') }}"
+        _tag_site: "{{ cf.zbp_site | default('') }}"
+        _tag_sla: "{{ cf.zbp_sla_code | default('') }}"
+        _tag_nb_status: "{{ hostvars[inventory_hostname].status.value | default('') }}"
+
+    - name: Coerce list-like values
+      set_fact:
+        _tmpl_extra_ids: >-
+          {{ _tmpl_extra_ids_raw if (_tmpl_extra_ids_raw is sequence and (_tmpl_extra_ids_raw is not string))
+                                   else ([ _tmpl_extra_ids_raw ] if (_tmpl_extra_ids_raw | length > 0) else []) }}
+        _desired_template_ids: >-
+          {{ ([ _tmpl_primary_id ] if _tmpl_primary_id | length > 0 else []) | union(_tmpl_extra_ids | map('string') | list) | unique }}
+
+    - name: Fail fast if key inputs are missing (plugin should ensure readiness already)
+      assert:
+        that:
+          - _iface_ip | length > 0
+          - _iface_type | length > 0
+          - _desired_template_ids | length > 0
+          - _group_id | length > 0
+        fail_msg: "Missing one of IP/interface/template/group for {{ inventory_hostname }}"
+
+    - name: Convert IDs to integers where needed
+      set_fact:
+        _proxy_id_int: "{{ (_proxy_id | int) if (_proxy_id | length > 0) else 0 }}"
+        _group_ids_int: [ "{{ _group_id | int }}" ]
+        _tmpl_ids_int: "{{ _desired_template_ids | map('int') | list }}"
+
+    - name: Look up group names from IDs
+      community.zabbix.zabbix_api:
+        server_url: "{{ zbx_url }}"
+        token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
+        login_user: "{{ zbx_user if (zbx_token | length == 0) else omit }}"
+        login_password: "{{ zbx_password if (zbx_token | length == 0) else omit }}"
+        method: hostgroup.get
+        params:
+          output: [ "groupid", "name" ]
+          groupids: "{{ _group_ids_int }}"
+      register: _grp
+
+    - name: Look up template names from IDs
+      community.zabbix.zabbix_api:
+        server_url: "{{ zbx_url }}"
+        token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
+        login_user: "{{ zbx_user if (zbx_token | length == 0) else omit }}"
+        login_password: "{{ zbx_password if (zbx_token | length == 0) else omit }}"
+        method: template.get
+        params:
+          output: [ "templateid", "host" ]
+          templateids: "{{ _tmpl_ids_int }}"
+      register: _tmpl
+
+    - name: Look up proxy name from ID (if any)
+      when: _proxy_id_int | int > 0
+      community.zabbix.zabbix_api:
+        server_url: "{{ zbx_url }}"
+        token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
+        login_user: "{{ zbx_user if (zbx_token | length == 0) else omit }}"
+        login_password: "{{ zbx_password if (zbx_token | length == 0) else omit }}"
+        method: proxy.get
+        params:
+          output: [ "proxyid", "host" ]
+          proxyids: [ "{{ _proxy_id_int }}" ]
+      register: _prox
+
+    - name: Materialize names for Ansible modules
+      set_fact:
+        _group_names: "{{ _grp.result | map(attribute='name') | list }}"
+        _template_names: "{{ _tmpl.result | map(attribute='host') | list }}"
+        _proxy_name: "{{ (_prox.result[0].host) if (_prox is defined and _prox.result | length > 0) else omit }}"
+
+    - block:
+        - name: Ensure host present (create if missing) with base attributes
+          community.zabbix.zabbix_host:
+            server_url: "{{ zbx_url }}"
+            token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
+            login_user: "{{ zbx_user if (zbx_token | length == 0) else omit }}"
+            login_password: "{{ zbx_password if (zbx_token | length == 0) else omit }}"
+            host: "{{ _nb_name }}"
+            name: "{{ _nb_visible }}"
+            state: present
+            status: enabled
+            groups: "{{ _group_names }}"
+            templates: "{{ _template_names }}"
+            proxy: "{{ _proxy_name | default(omit) }}"
+            interfaces:
+              - type: "{{ _iface_type | int }}"
+                main: 1
+                useip: 1
+                ip: "{{ _iface_ip }}"
+                dns: ""
+                port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
+
+        - name: Fetch hostid & current templates/tags/interfaces
+          community.zabbix.zabbix_api:
+            server_url: "{{ zbx_url }}"
+            token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
+            login_user: "{{ zbx_user if (zbx_token | length == 0) else omit }}"
+            login_password: "{{ zbx_password if (zbx_token | length == 0) else omit }}"
+            method: host.get
+            params:
+              output: [ "hostid", "host", "name" ]
+              selectParentTemplates: [ "templateid", "host" ]
+              selectTags: [ "tag", "value" ]
+              selectInterfaces: [ "interfaceid", "type", "ip", "main" ]
+              filter:
+                host: [ "{{ _nb_name }}" ]
+          register: _hostget
+
+        - name: Set hostid and current state facts
+          set_fact:
+            _hostid: "{{ _hostget.result[0].hostid }}"
+            _cur_templates: "{{ _hostget.result[0].parentTemplates | default([]) }}"
+            _cur_tags: "{{ _hostget.result[0].tags | default([]) }}"
+            _cur_ifaces: "{{ _hostget.result[0].interfaces | default([]) }}"
+
+        - name: Compute template deltas (replace set)
+          vars:
+            _cur_ids: "{{ _cur_templates | map(attribute='templateid') | map('int') | list }}"
+          set_fact:
+            _tmpl_to_link: "{{ _tmpl_ids_int | difference(_cur_ids) }}"
+            _tmpl_to_clear: "{{ _cur_ids | difference(_tmpl_ids_int) }}"
+
+        - name: Apply template links and unlinks (no clear)
+          when: _tmpl_to_link | length > 0 or _tmpl_to_clear | length > 0
+          community.zabbix.zabbix_api:
+            server_url: "{{ zbx_url }}"
+            token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
+            login_user: "{{ zbx_user if (zbx_token | length == 0) else omit }}"
+            login_password: "{{ zbx_password if (zbx_token | length == 0) else omit }}"
+            method: host.update
+            params:
+              hostid: "{{ _hostid }}"
+              templates: "{{ _tmpl_ids_int | map('regex_replace','^(.*)$','{"templateid": "\u0031"}') | map('from_json') | list }}"
+              templates_clear: "{{ _tmpl_to_clear | map('regex_replace','^(.*)$','{"templateid": "\u0031"}') | map('from_json') | list }}"
+
+        - name: Replace groups exactly (IDs)
+          community.zabbix.zabbix_api:
+            server_url: "{{ zbx_url }}"
+            token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
+            login_user: "{{ zbx_user if (zbx_token | length == 0) else omit }}"
+            login_password: "{{ zbx_password if (zbx_token | length == 0) else omit }}"
+            method: host.update
+            params:
+              hostid: "{{ _hostid }}"
+              groups: "{{ _group_ids_int | map('regex_replace','^(.*)$','{"groupid": "\u0031"}') | map('from_json') | list }}"
+
+        - name: Ensure proxy assignment (or detach)
+          community.zabbix.zabbix_api:
+            server_url: "{{ zbx_url }}"
+            token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
+            login_user: "{{ zbx_user if (zbx_token | length == 0) else omit }}"
+            login_password: "{{ zbx_password if (zbx_token | length == 0) else omit }}"
+            method: host.update
+            params:
+              hostid: "{{ _hostid }}"
+              proxy_hostid: "{{ (_proxy_id_int | string) if (_proxy_id_int | int > 0) else "0" }}"
+
+        - name: Ensure only one primary interface with correct type and IP
+          vars:
+            _match: "{{ _cur_ifaces | selectattr('main','equalto','1') | selectattr('type','equalto', (_iface_type | int)) | selectattr('ip','equalto', _iface_ip) | list }}"
+          block:
+            - name: Delete all existing interfaces if they don’t match
+              when: _match | length == 0 and _cur_ifaces | length > 0
+              community.zabbix.zabbix_api:
+                server_url: "{{ zbx_url }}"
+                token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
+                login_user: "{{ zbx_user if (zbx_token | length == 0) else omit }}"
+                login_password: "{{ zbx_password if (zbx_token | length == 0) else omit }}"
+                method: hostinterface.delete
+                params: "{{ _cur_ifaces | map(attribute='interfaceid') | list }}"
+
+            - name: Create the desired primary interface (if needed)
+              when: _match | length == 0
+              community.zabbix.zabbix_api:
+                server_url: "{{ zbx_url }}"
+                token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
+                login_user: "{{ zbx_user if (zbx_token | length == 0) else omit }}"
+                login_password: "{{ zbx_password if (zbx_token | length == 0) else omit }}"
+                method: hostinterface.create
+                params:
+                  hostid: "{{ _hostid }}"
+                  main: 1
+                  type: "{{ _iface_type | int }}"
+                  useip: 1
+                  ip: "{{ _iface_ip }}"
+                  dns: ""
+                  port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
+
+        - name: Merge/ensure tags (cmdb=true, environment/os/site/sla/nb_status)
+          vars:
+            desired:
+              - { tag: cmdb, value: "true" }
+              - { tag: environment, value: "{{ _tag_env }}" }
+              - { tag: os, value: "{{ _tag_os }}" }
+              - { tag: site, value: "{{ _tag_site }}" }
+              - { tag: sla, value: "{{ _tag_sla }}" }
+              - { tag: nb_status, value: "{{ _tag_nb_status }}" }
+            filtered_desired: "{{ desired | selectattr('value','string') | selectattr('value','!=','') | list }}"
+            cur_map: "{{ dict((_cur_tags | map(attribute='tag') | list) | zip(_cur_tags | map(attribute='value') | list)) }}"
+            merged: "{{ cur_map | combine({ item.tag: item.value }, recursive=True) }}"
+          set_fact:
+            _merged_tags: >-
+              {{ merged | dict2items(key_name='tag', value_name='value') | map('regex_replace','^(.*)$','{"tag": "\u0031", "value": "\u0031"}') | map('from_json') | list }}
+          loop: "{{ filtered_desired }}"
+          loop_control:
+            loop_var: item
+
+        - name: Apply merged tags
+          community.zabbix.zabbix_api:
+            server_url: "{{ zbx_url }}"
+            token: "{{ zbx_token if zbx_token | length > 0 else omit }}"
+            login_user: "{{ zbx_user if (zbx_token | length == 0) else omit }}"
+            login_password: "{{ zbx_password if (zbx_token | length == 0) else omit }}"
+            method: host.update
+            params:
+              hostid: "{{ _hostid }}"
+              tags: "{{ _merged_tags }}"
+
+        - name: Success writeback → NetBox (Device)
+          when: not (hostvars[inventory_hostname].is_virtual | default(false))
+          delegate_to: localhost
+          netbox.netbox.netbox_device:
+            netbox_url: "{{ nb_url }}"
+            netbox_token: "{{ nb_token }}"
+            validate_certs: "{{ nb_verify }}"
+            data:
+              name: "{{ _nb_name }}"
+              custom_fields:
+                zbp_status: "Synced"
+                zbp_last_sync: "{{ ansible_date_time.iso8601 }}"
+                zbp_sync_hint: ""
+            state: present
+
+        - name: Success writeback → NetBox (VM)
+          when: hostvars[inventory_hostname].is_virtual | default(false)
+          delegate_to: localhost
+          netbox.netbox.netbox_virtual_machine:
+            netbox_url: "{{ nb_url }}"
+            netbox_token: "{{ nb_token }}"
+            validate_certs: "{{ nb_verify }}"
+            data:
+              name: "{{ _nb_name }}"
+              custom_fields:
+                zbp_status: "Synced"
+                zbp_last_sync: "{{ ansible_date_time.iso8601 }}"
+                zbp_sync_hint: ""
+            state: present
+
+      rescue:
+        - name: Capture error message
+          set_fact:
+            _sync_err: "{{ ansible_failed_result.msg | default('Zabbix sync failed') }}"
+
+        - name: Failure writeback → NetBox (Device)
+          when: not (hostvars[inventory_hostname].is_virtual | default(false))
+          delegate_to: localhost
+          netbox.netbox.netbox_device:
+            netbox_url: "{{ nb_url }}"
+            netbox_token: "{{ nb_token }}"
+            validate_certs: "{{ nb_verify }}"
+            data:
+              name: "{{ _nb_name }}"
+              custom_fields:
+                zbp_status: "Not Synced"
+                zbp_sync_hint: "{{ _sync_err }}"
+            state: present
+
+        - name: Failure writeback → NetBox (VM)
+          when: hostvars[inventory_hostname].is_virtual | default(false)
+          delegate_to: localhost
+          netbox.netbox.netbox_virtual_machine:
+            netbox_url: "{{ nb_url }}"
+            netbox_token: "{{ nb_token }}"
+            validate_certs: "{{ nb_verify }}"
+            data:
+              name: "{{ _nb_name }}"
+              custom_fields:
+                zbp_status: "Not Synced"
+                zbp_sync_hint: "{{ _sync_err }}"
+            state: present
