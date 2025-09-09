@@ -70,13 +70,28 @@
         _tag_sla: "{{ cf.zbp_sla_code | default('') }}"
         _tag_nb_status: "{{ hostvars[inventory_hostname].status.value | default('') }}"
 
-    - name: Coerce list-like values
+    # 1) Coerce extra templates into a proper list of strings
+    - name: Coerce extra templates to list
       set_fact:
         _tmpl_extra_ids: >-
-          {{ _tmpl_extra_ids_raw if (_tmpl_extra_ids_raw is sequence and (_tmpl_extra_ids_raw is not string))
-                                   else ([ _tmpl_extra_ids_raw ] if (_tmpl_extra_ids_raw | length > 0) else []) }}
+          {{
+            (
+              _tmpl_extra_ids_raw
+              if (_tmpl_extra_ids_raw is sequence and (_tmpl_extra_ids_raw is not string))
+              else ( [ _tmpl_extra_ids_raw ] if (_tmpl_extra_ids_raw | default('') | length > 0) else [] )
+            )
+            | map('string') | list
+          }}
+
+    # 2) Build desired template IDs (primary + extras)
+    - name: Build desired template id list
+      set_fact:
         _desired_template_ids: >-
-          {{ ([ _tmpl_primary_id ] if _tmpl_primary_id | length > 0 else []) | union(_tmpl_extra_ids | map('string') | list) | unique }}
+          {{
+            ( [ _tmpl_primary_id ] if _tmpl_primary_id | length > 0 else [] )
+            | union(_tmpl_extra_ids)
+            | unique
+          }}
 
     - name: Fail fast if key inputs are missing (should be enforced by plugin)
       assert:
