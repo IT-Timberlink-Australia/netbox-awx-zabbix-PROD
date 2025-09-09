@@ -53,12 +53,6 @@
             | regex_replace('^$','/')    # ensure at least '/'
           }}
 
-    - debug:
-        msg:
-          zbx_api: "{{ zbx_api }}"
-          zbx_hostport: "{{ zbx_hostport }}"
-          zbx_pathroot: "{{ zbx_pathroot }}"
-      verbosity: 1
 
     # ---------- NetBox URL normalize (accept base or /api) ----------
     - name: Normalize NetBox URL (clean)
