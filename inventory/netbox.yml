@@ -8,16 +8,8 @@ query_filters:
 
 compose:
 zbx_status: custom_fields.zbp_status
-# Optional: keep these if used by your plays
-# host_ip: >-
-# {{ custom_fields.zbp_int_ip | default(primary_ip4.address | default('') | regex_replace('/\\d+$','')) }}
 
-
-# Group by *aliased* status string
 keyed_groups:
-- key: >-
-{{
-(zbx_status == 'Not Synced') | ternary('ready', zbx_status | lower | regex_replace('[^a-z0-9]+','_'))
-}}
+- key: "{{ 'ready' if (zbx_status | default('')) == 'Not Synced' else (zbx_status | default('unknown') | lower | regex_replace('[^a-z0-9]+','_')) }}"
 prefix: status
 separator: _
