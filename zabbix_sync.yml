@@ -1,5 +1,6 @@
 - name: Sync NetBox hosts into Zabbix (idempotent, no zabbix_api)
-  hosts: all
+  hosts: BEL-01AP01
+  connection: local   
   gather_facts: false
   vars:
     # Zabbix auth (prefer token). Provide via AWX Credentials/Env
