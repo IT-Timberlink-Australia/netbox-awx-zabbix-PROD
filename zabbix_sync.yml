@@ -157,7 +157,7 @@
         _proxy_id_int: "{{ ((_proxy_cf_raw | string) | regex_search('\\d+') | default('0')) | int }}"
 
     - name: Validate proxy id in Zabbix (when provided)
-      when: _proxy_id_int > 0
+      when: (_proxy_id_int | int) > 0
       uri:
         url: "{{ zbx_api }}"
         method: POST
@@ -174,10 +174,9 @@
       register: _proxy_chk
 
     - name: Assert proxy exists or visible to the token
-      when: _proxy_id_int > 0
+      when: (_proxy_id_int | int) > 0
       assert:
-        that:
-          - (_proxy_chk.json.result | length) == 1
+        that: [ (_proxy_chk.json.result | length | int) == 1 ]
         fail_msg: "Zabbix proxy id {{ _proxy_id_int }} not found or token lacks permission."
 
     # ---------- Zabbix host upsert + reconcile + NetBox writeback ----------
@@ -240,7 +239,7 @@
                 name: "{{ _nb_visible }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
-                proxy_hostid: "{{ (_proxy_id_int | int > 0) | ternary(_proxy_id_int | string, '0') }}"
+                proxy_hostid: "{{ ((_proxy_id_int | int) > 0) | ternary((_proxy_id_int | int) | string, '0') }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
                 interfaces:
                   - type: "{{ _iface_type | int }}"
@@ -275,7 +274,7 @@
                 name: "{{ _nb_visible }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
-                proxy_hostid: "{{ (_proxy_id_int | int > 0) | ternary(_proxy_id_int | string, '0') }}"
+                proxy_hostid: "{{ ((_proxy_id_int | int) > 0) | ternary((_proxy_id_int | int) | string, '0') }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
 
         # Ensure only one primary interface with correct type/IP
