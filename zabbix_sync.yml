@@ -7,6 +7,7 @@
     # AWX env/cred vars
     zbx_url:   "{{ lookup('env','ZABBIX_API_URL') }}"     # https://itmonitor.../zabbix/api_jsonrpc.php
     zbx_token: "{{ lookup('env','ZABBIX_API_TOKEN') }}"
+    zbx_verify: "{{ (lookup('env','ZABBIX_VERIFY') | default('false')) | bool }}"
     nb_url:    "{{ lookup('env','NETBOX_API') }}"         # https://netbox...  (base or /api)
     nb_token:  "{{ lookup('env','NETBOX_TOKEN') }}"
     nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('true')) | bool }}"
@@ -163,6 +164,7 @@
         method: POST
         headers: { Content-Type: "application/json-rpc" }
         body_format: json
+        validate_certs: "{{ zbx_verify }}"
         body:
           jsonrpc: "2.0"
           method: "proxy.get"
@@ -190,6 +192,7 @@
             method: POST
             headers: { Content-Type: "application/json-rpc" }
             body_format: json
+            validate_certs: "{{ zbx_verify }}"
             body:
               jsonrpc: "2.0"
               method: "host.get"
@@ -229,6 +232,7 @@
             method: POST
             headers: { Content-Type: "application/json-rpc" }
             body_format: json
+            validate_certs: "{{ zbx_verify }}"
             body:
               jsonrpc: "2.0"
               method: "host.create"
@@ -263,6 +267,7 @@
             method: POST
             headers: { Content-Type: "application/json-rpc" }
             body_format: json
+            validate_certs: "{{ zbx_verify }}"
             body:
               jsonrpc: "2.0"
               method: "host.update"
@@ -285,7 +290,7 @@
             headers: { Content-Type: "application/json-rpc" }
             body_format: json
             return_content: true
-            validate_certs: false
+            validate_certs: "{{ zbx_verify }}"
             body:
               jsonrpc: "2.0"
               method: "host.get"
@@ -314,6 +319,7 @@
                 method: POST
                 headers: { Content-Type: "application/json-rpc" }
                 body_format: json
+                validate_certs: "{{ zbx_verify }}"
                 body:
                   jsonrpc: "2.0"
                   method: "hostinterface.delete"
@@ -328,6 +334,7 @@
                 method: POST
                 headers: { Content-Type: "application/json-rpc" }
                 body_format: json
+                validate_certs: "{{ zbx_verify }}"
                 body:
                   jsonrpc: "2.0"
                   method: "hostinterface.create"
