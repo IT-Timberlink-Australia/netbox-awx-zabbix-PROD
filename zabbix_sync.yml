@@ -10,7 +10,7 @@
     zbx_verify: "{{ (lookup('env','ZABBIX_VERIFY') | default('false')) | bool }}"
     nb_url:    "{{ lookup('env','NETBOX_API') }}"         # https://netbox...  (base or /api)
     nb_token:  "{{ lookup('env','NETBOX_TOKEN') }}"
-    nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('true')) | bool }}"
+    nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('false')) | bool }}"
 
     # Zabbix default ports by interface type
     _iface_default_ports:
