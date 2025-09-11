@@ -5,7 +5,7 @@ strict: false
 
 # Only hosts ready to sync
 query_filters:
-- cf_zbp_status: "Not Synced"
+- cf_zbp_status: "not_synced"
 
 compose:
 zbx_status: custom_fields.zbp_status
