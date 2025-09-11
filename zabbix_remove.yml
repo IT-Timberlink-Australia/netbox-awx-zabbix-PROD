@@ -2,8 +2,8 @@
   gather_facts: false
   vars:
     zbx_url: "{{ lookup('env', 'ZABBIX_URL') }}"
-    zbx_user: "{{ lookup('env', 'ZABBIX_USER') }}"
-    zbx_password: "{{ lookup('env', 'ZABBIX_PASSWORD') }}"
+    zbx_token: "{{ lookup('env','ZABBIX_API_TOKEN') }}"
+    zbx_verify: "{{ (lookup('env','ZABBIX_VERIFY') | default('false')) | bool }}"
     remove_mode: "{{ ZBX_REMOVE_MODE | default('disable') }}"  # 'disable' or 'delete'
   tasks:
     - name: Disable host in Zabbix (soft removal)
@@ -33,7 +33,7 @@
         data:
           name: "{{ inventory_hostname }}"
           custom_fields:
-            zbp_status: "Removed"
+            zbp_status: "removed"
         state: present
       when: hostvars[inventory_hostname].is_vm | default(false) | bool == false
       delegate_to: localhost
@@ -46,7 +46,7 @@
         data:
           name: "{{ inventory_hostname }}"
           custom_fields:
-            zbp_status: "Removed"
+            zbp_status: "removed"
         state: present
       when: hostvars[inventory_hostname].is_vm | default(false)
       delegate_to: localhost
