@@ -1,5 +1,5 @@
 - name: Sync NetBox hosts into Zabbix (token-only)
-  hosts: BEL-01AP01
+  hosts: all
   connection: local
   gather_facts: false
 
@@ -18,6 +18,13 @@
       "2": "161"     # SNMP
       "3": "623"     # IPMI
       "4": "12345"   # JMX
+
+    zbp_status_value_map:
+      "Not Synced": "not_synced"
+      "Synced": "synced"
+      "Remove Pending": "remove_pending"
+      "Removed": "removed"
+      "NA": "na"
 
   tasks:
     - name: Validate inputs present
@@ -355,7 +362,7 @@
           set_fact:
             _cf_success: >-
               {{
-                {'zbp_status':'Synced'}
+                {'zbp_status':'synced'}                                      # ← value, not label
                 | combine( (_has_last_sync|bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)
                 | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': ''}, {}),                     recursive=True)
               }}
@@ -393,7 +400,7 @@
           set_fact:
             _cf_fail: >-
               {{
-                {'zbp_status':'Not Synced'}
+                {'zbp_status':'not_synced'}
                 | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': _sync_err}, {}), recursive=True)
               }}
 
