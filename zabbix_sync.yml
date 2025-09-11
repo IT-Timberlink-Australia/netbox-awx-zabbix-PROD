@@ -5,10 +5,10 @@
 
   vars:
     # AWX env/cred vars
-    zbx_url:   "{{ lookup('env','ZABBIX_API_URL') }}"     # https://itmonitor.../zabbix/api_jsonrpc.php
+    zbx_url:   "{{ lookup('env','ZABBIX_API_URL') }}"    
     zbx_token: "{{ lookup('env','ZABBIX_API_TOKEN') }}"
     zbx_verify: "{{ (lookup('env','ZABBIX_VERIFY') | default('false')) | bool }}"
-    nb_url:    "{{ lookup('env','NETBOX_API') }}"         # https://netbox...  (base or /api)
+    nb_url:    "{{ lookup('env','NETBOX_API') }}"       
     nb_token:  "{{ lookup('env','NETBOX_TOKEN') }}"
     nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('false')) | bool }}"
 
@@ -60,11 +60,6 @@
             (zbx_path_clean | regex_replace('(?i)/api_jsonrpc\\.php$',''))
             | regex_replace('^$','/')
           }}
-
-    # # one-off sanity
-    # - debug:
-    #     msg: { zbx_api: "{{ zbx_api }}", zbx_hostport: "{{ zbx_hostport }}", zbx_pathroot: "{{ zbx_pathroot }}" }
-    #   verbosity: 1
 
     # ---------- NetBox URL normalize ----------
     - name: Normalize NetBox URL (clean)
