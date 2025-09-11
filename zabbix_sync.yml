@@ -362,7 +362,7 @@
           set_fact:
             _cf_success: >-
               {{
-                {'zbp_status':'synced'}                                      # ← value, not label
+                {'zbp_status':'synced'}                              
                 | combine( (_has_last_sync|bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)
                 | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': ''}, {}),                     recursive=True)
               }}
