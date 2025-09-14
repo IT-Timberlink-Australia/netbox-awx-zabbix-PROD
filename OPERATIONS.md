@@ -3,8 +3,8 @@
 ## What lives here
 - `zabbix_sync.yml` — Sync/Upsert NetBox Devices/VMs into Zabbix and write status back into NetBox.
 - `zabbix_remove.yml` — Disable/Delete hosts in Zabbix and mark them `Removed` in NetBox.
-- `inventory/netbox.yml` — Targets items with `zbp_status: "Not Synced"`.
-- `inventory/netbox_remove.yml` — Targets items with `zbp_status: "Remove Pending"`.
+- `inventory/netbox.yml` — Targets items with `zbp_status: "not_synced"`.
+- `inventory/netbox_remove.yml` — Targets items with `zbp_status: "remove_pending"`.
 
 ## Required environment variables
 NETBOX_API, NETBOX_TOKEN, NETBOX_VERIFY
@@ -19,4 +19,4 @@ ansible-playbook -i inventory/netbox.yml zabbix_sync.yml --syntax-check
 
 ## Notes
 - TLS: start with ZABBIX_VERIFY=false, flip to true once the CA is in the EE.
-- Statuses used in NetBox: Not Synced → Synced → Remove Pending → Removed.
+- Statuses used in NetBox: not_synced → synced → remove_pending → removed.
