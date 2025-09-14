@@ -11,7 +11,7 @@
     nb_token:  "{{ lookup('env','NETBOX_TOKEN') }}"
     # TLS verify toggles (optional envs; default true)
     zbx_validate_certs: "{{ (lookup('env','ZABBIX_VERIFY') | default('true')) | bool }}"
-    nb_validate_certs:  "{{ (lookup('env','NETBOX_VERIFY')  | default('true')) | bool }}"
+    nb_validate_certs:  "{{ (lookup('env','NETBOX_VERIFY')  | default('false')) | bool }}"
     # Removal mode env; treat empty/missing as 'disable'
     _rm_mode: "{{ (lookup('env','ZBX_REMOVE_MODE') | default('disable', true) | string | lower | trim) }}"
     # NetBox target status label/value to set after removal
