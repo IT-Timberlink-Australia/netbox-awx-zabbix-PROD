@@ -27,6 +27,7 @@
           - (nb_url    | length) > 0
           - (nb_token  | length) > 0
 
+
     - name: Parse Zabbix URL (phase 1)
       set_fact:
         zbx_scheme_https: "{{ zbx_url | regex_search('^https://') is truthy }}"
@@ -52,6 +53,7 @@
             | regex_replace('^$','/')
           }}
 
+
     - name: Normalize NetBox URL (clean)
       set_fact:
         _nb_clean: "{{ nb_url | regex_replace('/+$','') }}"
@@ -60,6 +62,7 @@
       set_fact:
         nb_api_root: "{{ (_nb_clean | regex_search('/api$')) | ternary(_nb_clean, _nb_clean ~ '/api') }}"
         nb_base:     "{{ _nb_clean | regex_replace('/api$','') }}"
+
 
     - name: Probe NetBox CF zbp_last_sync
       uri:
@@ -210,7 +213,6 @@
                 {% if _tag_sla|default('') %}, {"tag":"device","value":"{{ _tag_sla }}"}{% endif %}
                 {% if _tag_nb_status|default('') %}, {"tag":"nb_status","value":"{{ _tag_nb_status }}"}{% endif %}
               ]
-
         - name: ZBX host.create (if absent)
           when: _hostid is not defined
           uri:
@@ -267,6 +269,7 @@
                 templates: "{{ _zbx_templates_json | from_yaml }}"
                 proxy_hostid: "{{ ((_proxy_id_int | int) > 0) | ternary((_proxy_id_int | int) | string, '0') }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
+
        
         - name: Fetch interfaces
           uri:
@@ -335,6 +338,7 @@
                     port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
                     details: "{{ _iface_details | default(omit) }}"
 
+      
         - name: Build success payload
           set_fact:
             _cf_success: >-
