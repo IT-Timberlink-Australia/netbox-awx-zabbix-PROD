@@ -1,24 +1,25 @@
 - name: Sync NetBox hosts into Zabbix (token-only)
   hosts: all
-  become: false
   connection: local
   gather_facts: false
 
   vars:
-    zbx_url:   "{{ lookup('env','ZABBIX_API_URL') }}"
+    ZBP_STATUS_SYNCED_VALUE: "{{ lookup('env','ZBP_STATUS_SYNCED_VALUE') | default('Synced') }}"
+    ZBP_STATUS_NOTSYNCED_VALUE: "{{ lookup('env','ZBP_STATUS_NOTSYNCED_VALUE') | default('Not Synced') }}"
+    # AWX env/cred vars
+    zbx_url:   "{{ lookup('env','ZABBIX_API_URL') | default(lookup('env','ZABBIX_URL'), true) | default(lookup('env','ZABBIX_HOST_URL'), true) }}"
     zbx_token: "{{ lookup('env','ZABBIX_API_TOKEN') }}"
     zbx_verify: "{{ (lookup('env','ZABBIX_VERIFY') | default('false')) | bool }}"
-    nb_url:    "{{ lookup('env','NETBOX_API') }}"
+    nb_url:    "{{ lookup('env','NETBOX_API') | default(lookup('env','NETBOX_URL'), true) | default(lookup('env','NETBOX_HOST_URL'), true) }}"
     nb_token:  "{{ lookup('env','NETBOX_TOKEN') }}"
     nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('true')) | bool }}"
-    ZBP_STATUS_SYNCED_VALUE: "{{ lookup('env','ZBP_STATUS_SYNCED_VALUE') | default('synced') }}"
-    ZBP_STATUS_NOTSYNCED_VALUE: "{{ lookup('env','ZBP_STATUS_NOTSYNCED_VALUE') | default('not_synced') }}"
 
+    # Zabbix default ports by interface type
     _iface_default_ports:
-      "1": "10050"
-      "2": "161"
-      "3": "623"
-      "4": "12345"
+      "1": "10050"   # Agent
+      "2": "161"     # SNMP
+      "3": "623"     # IPMI
+      "4": "12345"   # JMX
 
   tasks:
     - name: Validate inputs present
@@ -29,6 +30,7 @@
           - (nb_url    | length) > 0
           - (nb_token  | length) > 0
 
+    # ---------- Zabbix URL parsing (robust; no doubled api_jsonrpc.php) ----------
     - name: Parse Zabbix URL (phase 1)
       set_fact:
         zbx_scheme_https: "{{ zbx_url | regex_search('^https://') is truthy }}"
@@ -39,11 +41,11 @@
       set_fact:
         zbx_api: >-
           {{
-            (zbx_url | regex_replace('/+$',''))
-            | regex_replace('(?i)/api_jsonrpc\\.php$','')
+          {{
+            (zbx_url | regex_replace('[?#].*$', '') | regex_replace('/+$',''))
+            | regex_replace('(?i)/api_jsonrpc\.php$','')
             ~ '/api_jsonrpc.php'
           }}
-        zbx_path_clean: "{{ zbx_path_only | regex_replace('/+$','') }}"
         _auth: "{{ zbx_token }}"
 
     - name: Parse Zabbix URL (phase 3)
@@ -54,6 +56,12 @@
             | regex_replace('^$','/')
           }}
 
+    # # one-off sanity
+    # - debug:
+    #     msg: { zbx_api: "{{ zbx_api }}", zbx_hostport: "{{ zbx_hostport }}", zbx_pathroot: "{{ zbx_pathroot }}" }
+    #   verbosity: 1
+
+    # ---------- NetBox URL normalize ----------
     - name: Normalize NetBox URL (clean)
       set_fact:
         _nb_clean: "{{ nb_url | regex_replace('/+$','') }}"
@@ -63,6 +71,7 @@
         nb_api_root: "{{ (_nb_clean | regex_search('/api$')) | ternary(_nb_clean, _nb_clean ~ '/api') }}"
         nb_base:     "{{ _nb_clean | regex_replace('/api$','') }}"
 
+    # ---------- Probe CF presence for write-back ----------
     - name: Probe NetBox CF zbp_last_sync
       uri:
         url: "{{ nb_api_root }}/extras/custom-fields/?name=zbp_last_sync"
@@ -88,6 +97,7 @@
         _has_last_sync: "{{ (_probe_last_sync.json.results | default([]) | length) > 0 }}"
         _has_sync_hint: "{{ (_probe_sync_hint.json.results | default([]) | length) > 0 }}"
 
+    # ---------- Normalize vars from NetBox inventory ----------
     - name: Normalize host vars from NetBox
       vars:
         cf: "{{ hostvars[inventory_hostname].custom_fields | default({}) }}"
@@ -173,9 +183,11 @@
         that: [ (_proxy_chk.json.result | length | int) == 1 ]
         fail_msg: "Zabbix proxy id {{ _proxy_id_int }} not found or token lacks permission."
 
+    # ---------- Zabbix host upsert + reconcile + NetBox writeback ----------
     - name: Zabbix host upsert + reconcile + NetBox writeback
       block:
 
+        # Get host
         - name: ZBX host.get by name
           uri:
             url: "{{ zbx_api }}"
@@ -191,42 +203,13 @@
               params:
                 filter: { host: [ "{{ _nb_name }}" ] }
                 output: [ "hostid", "name", "host", "proxy_hostid" ]
-          register: _zbx_get
+          register: _host_get
 
-        # Normalize whatever the previous task registered to → _zbx_get
-        - name: Normalize host.get result variable
+        - name: Cache hostid if exists
           set_fact:
-            _zbx_get: >-
-              {{
-                zbx_get
-                | default(zbx_host_get, true)
-                | default(zabbix_get, true)
-                | default(zbx_by_name, true)
-                | default({}, true)
-              }}
-
-        # Always set something; never feed set_fact an empty dict again
-
-        - name: Cache hostid if exists (safe)
-          when:
-            - _zbx_get is defined
-            - _zbx_get.json is defined
-            - _zbx_get.json.result is defined
-            - (_zbx_get.json.result | length) > 0
-          set_fact:
-            _zbx_hostid: "{{ _zbx_get.json.result[0].hostid | string }}"
-            _zbx_exists: true
-
-        - name: Note when host does not exist yet
-          when:
-            - _zbx_get is not defined
-              or _zbx_get.json is not defined
-              or _zbx_get.json.result is not defined
-              or (_zbx_get.json.result | length) == 0
-          set_fact:
-            _zbx_hostid: null
-            _zbx_exists: false
-
+            _hostid: "{{ (_host_get.json.result[0].hostid) if ((_host_get.json.result | default([]) | length) > 0) else omit }}"
+            _host_present: "{{ (_host_get.json.result | default([]) | length) > 0 }}"
+        # Build arrays
         - name: Build Zabbix arrays
           set_fact:
             _zbx_groups_json: >-
@@ -243,8 +226,9 @@
                 {% if _tag_nb_status|default('') %}, {"tag":"nb_status","value":"{{ _tag_nb_status }}"}{% endif %}
               ]
 
+        # Create or update host (replace groups & templates). No Jinja blocks inside mappings!
         - name: ZBX host.create (if absent)
-          when: _zbx_hostid is none
+          when: _hostid is not defined
           uri:
             url: "{{ zbx_api }}"
             method: POST
@@ -263,6 +247,7 @@
                 templates: "{{ _zbx_templates_json | from_yaml }}"
                 proxy_hostid: "{{ ((_proxy_id_int | int) > 0) | ternary((_proxy_id_int | int) | string, '0') }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
+                status: "{{ _zbx_desired_status }}"
                 interfaces:
                   - type: "{{ _iface_type | int }}"
                     main: 1
@@ -279,7 +264,7 @@
             _hostid: "{{ _host_create.json.result.hostids[0] }}"
 
         - name: ZBX host.update (if present)
-          when: _zbx_hostid is not none
+          when: _hostid is defined
           uri:
             url: "{{ zbx_api }}"
             method: POST
@@ -293,13 +278,15 @@
               auth: "{{ _auth }}"
               params:
                 hostid: "{{ _hostid }}"
+                status: "{{ _zbx_desired_status }}"
                 host: "{{ _nb_name }}"
                 name: "{{ _nb_visible }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
                 proxy_hostid: "{{ ((_proxy_id_int | int) > 0) | ternary((_proxy_id_int | int) | string, '0') }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
-       
+
+        # Ensure only one primary interface with correct type/IP
         - name: Fetch interfaces
           uri:
             url: "{{ zbx_api }}"
@@ -329,7 +316,7 @@
           vars:
             _match: "{{ _cur_ifaces | selectattr('main','equalto','1') | selectattr('type','equalto', (_iface_type | int)) | selectattr('ip','equalto', _iface_ip) | list }}"
           block:
-            - name: Delete all existing interfaces if they dont match
+            - name: Delete all existing interfaces if they don’t match
               when: _match | length == 0 and _cur_ifaces | length > 0
               uri:
                 url: "{{ zbx_api }}"
@@ -367,19 +354,14 @@
                     port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
                     details: "{{ _iface_details | default(omit) }}"
 
+        # Success write-back
         - name: Build success payload
           set_fact:
             _cf_success: >-
               {{
                 {'zbp_status': ZBP_STATUS_SYNCED_VALUE}
-                | combine(
-                    (_has_last_sync|bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}),
-                    recursive=True
-                  )
-                | combine(
-                    (_has_sync_hint|bool) | ternary({'zbp_sync_hint': ''}, {}),
-                    recursive=True
-                  )
+                | combine( (_has_last_sync|bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)
+                | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': ''}, {}),                     recursive=True)
               }}
 
         - name: Success writeback → NetBox (Device)
@@ -411,21 +393,12 @@
           set_fact:
             _sync_err: "{{ (ansible_failed_result.msg | default(ansible_failed_task.name | default('Zabbix sync failed'))) }}"
 
-        - name: Sanitize sync error string
-          set_fact:
-            _sync_err_safe: >-
-              {{
-                (_sync_err | string)
-                | regex_replace('[\r\n]+',' | ')
-                | regex_replace('{{','⟪⟪') | regex_replace('}}','⟫⟫') | regex_replace('#','﹟')
-              }}
-
         - name: Build failure payload
           set_fact:
             _cf_fail: >-
               {{
                 {'zbp_status': ZBP_STATUS_NOTSYNCED_VALUE}
-                | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': _sync_err_safe}, {}), recursive=True)
+                | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': _sync_err}, {}), recursive=True)
               }}
 
         - name: Failure writeback → NetBox (Device)
