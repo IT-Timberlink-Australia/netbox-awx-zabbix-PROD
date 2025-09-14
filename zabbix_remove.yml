@@ -13,30 +13,51 @@
     validate_certs: false
 
   tasks:
+    # Phase 1 — basic parts (+ strip any query/fragment)
     - name: Parse Zabbix URL (phase 1)
       set_fact:
+        _zbx_url_raw: "{{ zbx_url | regex_replace('\\s+$','') }}"
         zbx_scheme_https: "{{ zbx_url | regex_search('^https://') is truthy }}"
         zbx_hostport: "{{ (zbx_url | regex_replace('^https?://','')) | regex_replace('/.*$','') }}"
-        zbx_path_only: "{{ '/' ~ (zbx_url | regex_replace('^https?://[^/]+','') | regex_replace('^/+','')) }}"
+        zbx_path_only: >-
+          {{
+            '/' ~ (
+              zbx_url
+              | regex_replace('^https?://[^/]+','')
+              | regex_replace('^[\\/]+','')
+              | regex_replace('[?#].*$','')              # ← strip ?query#frag
+            )
+          }}
 
+    # Phase 2 — canonical API endpoint + auth alias
     - name: Parse Zabbix URL (phase 2)
       set_fact:
         zbx_api: >-
           {{
-            (zbx_url | regex_replace('/+$',''))
-            | regex_replace('(?i)/api_jsonrpc\\.php$','')
-            ~ '/api_jsonrpc.php'
+            (_zbx_url_raw
+            | regex_replace('[?#].*$','')               # ← strip ?query#frag
+            | regex_replace('/+$','')
+            | regex_replace('/api_jsonrpc\\.php$','', ignorecase=True)
+            ) ~ '/api_jsonrpc.php'
           }}
         zbx_path_clean: "{{ zbx_path_only | regex_replace('/+$','') }}"
         _auth: "{{ zbx_token }}"
 
+    # Phase 3 — pathroot (UI base like /zabbix)
     - name: Parse Zabbix URL (phase 3)
       set_fact:
         zbx_pathroot: >-
           {{
-            (zbx_path_clean | regex_replace('(?i)/api_jsonrpc\\.php$',''))
+            (zbx_path_clean | regex_replace('/api_jsonrpc\\.php$','', ignorecase=True))
             | regex_replace('^$','/')
           }}
+
+    # Defensive assert (helps future-self)
+    - name: Validate computed Zabbix API URL
+      assert:
+        that:
+          - zbx_api is search('api_jsonrpc\\.php$')
+        fail_msg: "ZABBIX endpoint must end with /api_jsonrpc.php (got: {{ zbx_api }})"
 
     - name: Determine Zabbix host name to remove
       set_fact:
@@ -46,7 +67,7 @@
 
     - name: Lookup host in Zabbix
       uri:
-        url: "{{ zbx_url }}"
+        url: "{{ zbx_api }}"
         method: POST
         headers:
           Content-Type: "application/json"
@@ -75,7 +96,7 @@
     - name: Delete host in Zabbix
       when: _zbx_hostid is defined
       uri:
-        url: "{{ zbx_url }}"
+        url: "{{ zbx_api }}"
         method: POST
         headers:
           Content-Type: "application/json"
