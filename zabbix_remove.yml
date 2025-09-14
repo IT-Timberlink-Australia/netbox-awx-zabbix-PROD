@@ -15,7 +15,7 @@
     # Removal mode env; treat empty/missing as 'disable'
     _rm_mode: "{{ (lookup('env','ZBX_REMOVE_MODE') | default('disable', true) | string | lower | trim) }}"
     # NetBox target status label/value to set after removal
-    nb_target_status: "{{ lookup('env','NB_REMOVE_STATUS') | default('Removed', true) }}"
+    nb_target_status: "{{ lookup('env','NB_REMOVE_STATUS') | default('removed', true) }}"
 
   tasks:
     # -------- Resolve endpoints from multiple possible env names --------
