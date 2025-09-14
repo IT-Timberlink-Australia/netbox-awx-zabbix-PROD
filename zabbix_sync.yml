@@ -191,6 +191,28 @@
                 output: [ "hostid", "name", "host", "proxy_hostid" ]
           register: _host_get
 
+        # Normalize whatever the previous task registered to → _zbx_get
+        - name: Normalize host.get result variable
+          set_fact:
+            _zbx_get: >-
+              {{
+                zbx_get
+                | default(zbx_host_get, true)
+                | default(zabbix_get, true)
+                | default(zbx_by_name, true)
+                | default({}, true)
+              }}
+
+        # Always set something; never feed set_fact an empty dict again
+        - name: Cache hostid if exists (safe)
+          set_fact:
+            _zbx_hostid: >-
+              {{
+                (_zbx_get.json.result | default([]) | length) > 0
+                | ternary((_zbx_get.json.result[0].hostid | string), None)
+              }}
+            _zbx_exists: "{{ (_zbx_get.json.result | default([]) | length) > 0 }}"
+
         - name: Cache hostid if exists
           set_fact:
             _zbx_hostid: >-
