@@ -259,10 +259,12 @@
 
         - name: Cache hostid if exists
           set_fact:
-            _hostid: >-
-              {{ (_host_get.json.result | default([]) | length) > 0
-                 | ternary((_host_get.json.result[0].hostid | string), omit) }}
             _host_present: "{{ (_host_get.json.result | default([]) | length) > 0 }}"
+
+        - name: Set hostid when present
+          set_fact:
+            _hostid: "{{ _host_get.json.result[0].hostid | string }}"
+          when: _host_present | bool
 
         # Build arrays
         - name: Build Zabbix arrays
