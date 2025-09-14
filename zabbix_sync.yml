@@ -236,7 +236,7 @@
               ]
 
         - name: ZBX host.create (if absent)
-          when: _hostid is not defined
+          when: _zbx_hostid is none
           uri:
             url: "{{ zbx_api }}"
             method: POST
@@ -271,7 +271,7 @@
             _hostid: "{{ _host_create.json.result.hostids[0] }}"
 
         - name: ZBX host.update (if present)
-          when: _hostid is defined
+          when: _zbx_hostid is not none
           uri:
             url: "{{ zbx_api }}"
             method: POST
