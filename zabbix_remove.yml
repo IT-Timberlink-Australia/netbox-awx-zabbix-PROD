@@ -13,6 +13,31 @@
     validate_certs: false
 
   tasks:
+    - name: Parse Zabbix URL (phase 1)
+      set_fact:
+        zbx_scheme_https: "{{ zbx_url | regex_search('^https://') is truthy }}"
+        zbx_hostport: "{{ (zbx_url | regex_replace('^https?://','')) | regex_replace('/.*$','') }}"
+        zbx_path_only: "{{ '/' ~ (zbx_url | regex_replace('^https?://[^/]+','') | regex_replace('^/+','')) }}"
+
+    - name: Parse Zabbix URL (phase 2)
+      set_fact:
+        zbx_api: >-
+          {{
+            (zbx_url | regex_replace('/+$',''))
+            | regex_replace('(?i)/api_jsonrpc\\.php$','')
+            ~ '/api_jsonrpc.php'
+          }}
+        zbx_path_clean: "{{ zbx_path_only | regex_replace('/+$','') }}"
+        _auth: "{{ zbx_token }}"
+
+    - name: Parse Zabbix URL (phase 3)
+      set_fact:
+        zbx_pathroot: >-
+          {{
+            (zbx_path_clean | regex_replace('(?i)/api_jsonrpc\\.php$',''))
+            | regex_replace('^$','/')
+          }}
+
     - name: Determine Zabbix host name to remove
       set_fact:
         _zbx_host: >-
