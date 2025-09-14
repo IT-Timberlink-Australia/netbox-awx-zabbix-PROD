@@ -1,5 +1,5 @@
 - name: Sync NetBox hosts into Zabbix (token-only)
-  hosts: BEL-01AP01
+  hosts: all
   connection: local
   gather_facts: false
 
