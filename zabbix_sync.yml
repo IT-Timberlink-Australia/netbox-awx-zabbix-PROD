@@ -191,7 +191,7 @@
               params:
                 filter: { host: [ "{{ _nb_name }}" ] }
                 output: [ "hostid", "name", "host", "proxy_hostid" ]
-          register: _host_get
+          register: _zbx_get
 
         # Normalize whatever the previous task registered to → _zbx_get
         - name: Normalize host.get result variable
@@ -206,21 +206,27 @@
               }}
 
         # Always set something; never feed set_fact an empty dict again
-        - name: Cache hostid if exists (safe)
-          set_fact:
-            _zbx_hostid: >-
-              {{
-                (_zbx_get.json.result | default([]) | length) > 0
-                | ternary((_zbx_get.json.result[0].hostid | string), None)
-              }}
-            _zbx_exists: "{{ (_zbx_get.json.result | default([]) | length) > 0 }}"
 
-        - name: Cache hostid if exists
+        - name: Cache hostid if exists (safe)
+          when:
+            - _zbx_get is defined
+            - _zbx_get.json is defined
+            - _zbx_get.json.result is defined
+            - (_zbx_get.json.result | length) > 0
           set_fact:
-            _zbx_hostid: >-
-              {{ (zbx_get.json.result | default([]) | length) > 0
-                 | ternary((zbx_get.json.result[0].hostid | string), None) }}
-            _zbx_exists: "{{ (zbx_get.json.result | default([]) | length) > 0 }}"
+            _zbx_hostid: "{{ _zbx_get.json.result[0].hostid | string }}"
+            _zbx_exists: true
+
+        - name: Note when host does not exist yet
+          when:
+            - _zbx_get is not defined
+              or _zbx_get.json is not defined
+              or _zbx_get.json.result is not defined
+              or (_zbx_get.json.result | length) == 0
+          set_fact:
+            _zbx_hostid: null
+            _zbx_exists: false
+
         - name: Build Zabbix arrays
           set_fact:
             _zbx_groups_json: >-
