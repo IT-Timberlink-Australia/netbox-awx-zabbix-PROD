@@ -225,6 +225,23 @@
                 {% if _tag_nb_status|default('') %}, {"tag":"nb_status","value":"{{ _tag_nb_status }}"}{% endif %}
               ]
 
+        # Treat only NetBox "active" as enabled in Zabbix. Everything else → disabled.
+        # 0 = enabled/monitored, 1 = disabled in Zabbix.
+        - name: Normalize NetBox status and set desired Zabbix status
+          vars:
+            nb_active_values: ['active']   # extend if you use custom values
+            _nb_status_raw: >-
+              {{
+                hostvars[inventory_hostname].status
+                | default(hostvars[inventory_hostname].device.status
+                | default(hostvars[inventory_hostname].virtual_machine.status
+                | default('')))
+              }}
+            _nb_status_value: >-
+              {{ (_nb_status_raw.value | default(_nb_status_raw | string)) | lower }}
+          set_fact:
+            _zbx_desired_status: "{{ 0 if _nb_status_value in nb_active_values else 1 }}"
+
         - name: ZBX host.create (if absent)
           when: _hostid is not defined
           uri:
@@ -241,6 +258,7 @@
               params:
                 host: "{{ _nb_name }}"
                 name: "{{ _nb_visible }}"
+                status: "{{ _zbx_desired_status | int }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
                 proxy_hostid: "{{ ((_proxy_id_int | int) > 0) | ternary((_proxy_id_int | int) | string, '0') }}"
@@ -277,6 +295,7 @@
                 hostid: "{{ _hostid }}"
                 host: "{{ _nb_name }}"
                 name: "{{ _nb_visible }}"
+                status: "{{ _zbx_desired_status | int }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
                 proxy_hostid: "{{ ((_proxy_id_int | int) > 0) | ternary((_proxy_id_int | int) | string, '0') }}"
