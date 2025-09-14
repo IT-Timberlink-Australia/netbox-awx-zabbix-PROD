@@ -285,13 +285,7 @@
 
         - name: Derive desired Zabbix status from NetBox status (active=enabled, else disabled)
           set_fact:
-            _nb_status_norm: >-
-              {{
-                (hostvars[inventory_hostname].status.value
-                 | default(hostvars[inventory_hostname].status | string, true)
-                 | default('', true))
-                | string | lower
-              }}
+            _nb_status_norm: "{{ _tag_nb_status | default('', true) | string | lower }}"
             _zbx_desired_status: "{{ 0 if _nb_status_norm == 'active' else 1 }}"
 
         # Create or update host (replace groups & templates). No Jinja blocks inside mappings!
