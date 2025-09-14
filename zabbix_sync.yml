@@ -1,3 +1,57 @@
+---
+# =============================================================================
+# NetBox to Zabbix Host Synchronization Playbook
+# =============================================================================
+# Description: Synchronizes NetBox device/VM inventory into Zabbix monitoring
+#              system with bidirectional status tracking via custom fields.
+#
+# Author: Infrastructure Team
+# Version: 2.0
+# Last Updated: 2024
+#
+# Requirements:
+#   - Ansible 2.9+
+#   - netbox.netbox collection
+#   - Zabbix API access with appropriate permissions
+#   - NetBox API access with custom field write permissions
+#
+# Environment Variables Required:
+#   - ZABBIX_API_URL: Zabbix API endpoint (e.g., https://zabbix.example.com/api_jsonrpc.php)
+#   - ZABBIX_API_TOKEN: Zabbix API authentication token
+#   - ZABBIX_VERIFY: SSL certificate verification (default: false)
+#   - NETBOX_API: NetBox API endpoint (e.g., https://netbox.example.com/api)
+#   - NETBOX_TOKEN: NetBox API authentication token
+#   - NETBOX_VERIFY: SSL certificate verification (default: true)
+#
+# NetBox Custom Fields Required:
+#   - zbp_vname: Visible name in Zabbix (optional, defaults to hostname)
+#   - zbp_pri_template_name_id: Primary Zabbix template ID
+#   - zb_extra_templates: Additional template IDs (list)
+#   - zbp_pri_template_int_id: Interface type (1=Agent, 2=SNMP, 3=IPMI, 4=JMX)
+#   - zbp_int_ip: Interface IP address
+#   - zbp_group_id: Zabbix host group ID
+#   - zbp_proxy_id: Zabbix proxy ID (optional)
+#   - zb_mon_env: Environment tag (optional)
+#   - zbp_platform: OS platform tag (optional)
+#   - zbp_site: Site tag (optional)
+#   - zbp_sla_code: SLA code tag (optional)
+#   - zbp_status: Sync status (managed by playbook)
+#   - zbp_last_sync: Last sync timestamp (managed by playbook)
+#   - zbp_sync_hint: Sync error details (managed by playbook)
+#
+# Usage:
+#   ansible-playbook -i inventory zabbix_sync.yml
+#
+# Features:
+#   - Creates or updates Zabbix hosts based on NetBox inventory
+#   - Supports multiple interface types with appropriate configurations
+#   - Handles both devices and virtual machines
+#   - Provides comprehensive error handling and status tracking
+#   - Validates proxy existence and permissions
+#   - Manages interface configuration (ensures single primary interface)
+#   - Bidirectional status updates to NetBox custom fields
+# =============================================================================
+
 - name: Sync NetBox hosts into Zabbix (token-only)
   hosts: all
   connection: local

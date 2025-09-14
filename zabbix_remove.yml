@@ -1,4 +1,56 @@
 ---
+# =============================================================================
+# Zabbix Host Removal Playbook
+# =============================================================================
+# Description: Removes or disables hosts in Zabbix and updates NetBox status
+#              accordingly. Supports both soft (disable) and hard (delete) removal.
+#
+# Author: Infrastructure Team
+# Version: 1.0
+# Last Updated: 2024
+#
+# Requirements:
+#   - Ansible 2.9+
+#   - netbox.netbox collection
+#   - Zabbix API access with host management permissions
+#   - NetBox API access with custom field write permissions
+#
+# Environment Variables Required:
+#   - ZABBIX_API_TOKEN: Zabbix API authentication token
+#   - NETBOX_TOKEN: NetBox API authentication token
+#   - ZABBIX_VERIFY: SSL certificate verification (default: true)
+#   - NETBOX_VERIFY: SSL certificate verification (default: false)
+#
+# Environment Variables Optional:
+#   - ZABBIX_API_URL: Zabbix API endpoint (alternative: ZABBIX_URL, ZABBIX_HOST_URL)
+#   - NETBOX_API: NetBox API endpoint (alternative: NETBOX_URL, NETBOX_HOST_URL)
+#   - ZBX_REMOVE_MODE: Removal mode - 'disable' (default) or 'delete'
+#   - NB_REMOVE_STATUS: NetBox status to set after removal (default: 'removed')
+#
+# NetBox Custom Fields Used:
+#   - zbp_status: Sync status (updated to NB_REMOVE_STATUS)
+#   - zbp_sync_hint: Sync error details (cleared on successful removal)
+#
+# Usage:
+#   # Soft removal (disable host)
+#   ansible-playbook -i inventory zabbix_remove.yml
+#
+#   # Hard removal (delete host)
+#   ZBX_REMOVE_MODE=delete ansible-playbook -i inventory zabbix_remove.yml
+#
+#   # Custom NetBox status after removal
+#   NB_REMOVE_STATUS=decommissioned ansible-playbook -i inventory zabbix_remove.yml
+#
+# Features:
+#   - Flexible URL resolution from multiple environment variable names
+#   - Supports both disable and delete operations
+#   - Updates NetBox custom fields with removal status
+#   - Handles both devices and virtual machines
+#   - Provides detailed operation summaries
+#   - Validates host existence before attempting removal
+#   - Confirms status changes for disable operations
+# =============================================================================
+
 - name: "Zabbix remove hosts (host-URL friendly, v5: default mode + set NetBox status)"
   hosts: all
   connection: local
