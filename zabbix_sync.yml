@@ -86,20 +86,6 @@
         _has_last_sync: "{{ (_probe_last_sync.json.results | default([]) | length) > 0 }}"
         _has_sync_hint: "{{ (_probe_sync_hint.json.results | default([]) | length) > 0 }}"
 
-    - name: Detect templated strings inside NetBox custom_fields
-      vars:
-        _cf_raw: "{{ hostvars[inventory_hostname].custom_fields | default({}) }}"
-        _cf_suspicious: >-
-          {{
-            _cf_raw | dict2items
-            | selectattr('value','string')
-            | selectattr('value','search','({{|}}|#)')
-            | map(attribute='key') | list
-          }}
-      fail:
-        msg: "Device {{ inventory_hostname }} has templated content in NetBox custom_fields: {{ _cf_suspicious }}"
-      when: _cf_suspicious | length > 0
-
     - name: Normalize host vars from NetBox
       vars:
         cf: "{{ hostvars[inventory_hostname].custom_fields | default({}) }}"
@@ -207,8 +193,10 @@
 
         - name: Cache hostid if exists
           set_fact:
-            _hostid: "{{ (_host_get.json.result[0].hostid) if (_host_get.json.result|length) else omit }}"
-
+            _zbx_hostid: >-
+              {{ (zbx_get.json.result | default([]) | length) > 0
+                 | ternary((zbx_get.json.result[0].hostid | string), None) }}
+            _zbx_exists: "{{ (zbx_get.json.result | default([]) | length) > 0 }}"
         - name: Build Zabbix arrays
           set_fact:
             _zbx_groups_json: >-
@@ -224,23 +212,6 @@
                 {% if _tag_sla|default('') %}, {"tag":"device","value":"{{ _tag_sla }}"}{% endif %}
                 {% if _tag_nb_status|default('') %}, {"tag":"nb_status","value":"{{ _tag_nb_status }}"}{% endif %}
               ]
-
-        # Treat only NetBox "active" as enabled in Zabbix. Everything else → disabled.
-        # 0 = enabled/monitored, 1 = disabled in Zabbix.
-        - name: Normalize NetBox status and set desired Zabbix status
-          vars:
-            nb_active_values: ['active']   # extend if you use custom values
-            _nb_status_raw: >-
-              {{
-                hostvars[inventory_hostname].status
-                | default(hostvars[inventory_hostname].device.status
-                | default(hostvars[inventory_hostname].virtual_machine.status
-                | default('')))
-              }}
-            _nb_status_value: >-
-              {{ (_nb_status_raw.value | default(_nb_status_raw | string)) | lower }}
-          set_fact:
-            _zbx_desired_status: "{{ 0 if _nb_status_value in nb_active_values else 1 }}"
 
         - name: ZBX host.create (if absent)
           when: _hostid is not defined
@@ -258,7 +229,6 @@
               params:
                 host: "{{ _nb_name }}"
                 name: "{{ _nb_visible }}"
-                status: "{{ _zbx_desired_status | int }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
                 proxy_hostid: "{{ ((_proxy_id_int | int) > 0) | ternary((_proxy_id_int | int) | string, '0') }}"
@@ -295,7 +265,6 @@
                 hostid: "{{ _hostid }}"
                 host: "{{ _nb_name }}"
                 name: "{{ _nb_visible }}"
-                status: "{{ _zbx_desired_status | int }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
                 proxy_hostid: "{{ ((_proxy_id_int | int) > 0) | ternary((_proxy_id_int | int) | string, '0') }}"
@@ -368,22 +337,13 @@
                     port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
                     details: "{{ _iface_details | default(omit) }}"
 
-        - name: Sanitize sync error string for NetBox
-          set_fact:
-            _sync_err_safe: >-
-              {{
-                (_sync_err | string)
-                | regex_replace('[\r\n]+',' | ')
-                | regex_replace('{{','⟪⟪')
-                | regex_replace('}}','⟫⟫')
-                | regex_replace('#','﹟')
-              }}
-
         - name: Build success payload
           set_fact:
             _cf_success: >-
               {{
-                {'zbp_status':'synced'}| combine( (_has_last_sync|bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)| combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': ''}, {}), recursive=True)
+                {'zbp_status':'synced'}
+                | combine( (_has_last_sync|bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)
+                | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': ''}, {}), recursive=True)
               }}
 
         - name: Success writeback → NetBox (Device)
@@ -419,7 +379,8 @@
           set_fact:
             _cf_fail: >-
               {{
-                {'zbp_status':'not_synced'}| combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': _sync_err}, {}), recursive=True)
+                {'zbp_status': 'not'}
+                | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': _sync_err}, {}), recursive=True)
               }}
 
         - name: Failure writeback → NetBox (Device)
