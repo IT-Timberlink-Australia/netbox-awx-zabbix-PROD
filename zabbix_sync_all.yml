@@ -313,7 +313,7 @@
           vars:
             _match: "{{ _cur_ifaces | selectattr('main','equalto','1') | selectattr('type','equalto', (_iface_type | int)) | selectattr('ip','equalto', _iface_ip) | list }}"
           block:
-            - name: Delete all existing interfaces if they don’t match
+            - name: Delete all existing interfaces if they dont match
               when: _match | length == 0 and _cur_ifaces | length > 0
               uri:
                 url: "{{ zbx_api }}"
@@ -356,7 +356,7 @@
           set_fact:
             _cf_success: >-
               {{
-                {'zbp_status': 'Synced'}
+                {'zbp_status':'synced'}
                 | combine( (_has_last_sync|bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)
                 | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': ''}, {}), recursive=True)
               }}
