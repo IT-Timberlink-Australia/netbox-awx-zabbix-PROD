@@ -1,22 +1,18 @@
 ---
-- name: Zabbix remove hosts (host-URL friendly, v3 fixes for NetBox module URL)
+- name: "Zabbix remove hosts (host-URL friendly, v4: split canonicalisation)"
   hosts: all
   connection: local
   become: false
   gather_facts: false
 
   vars:
-    # Tokens
     zbx_token: "{{ lookup('env','ZABBIX_API_TOKEN') }}"
     nb_token:  "{{ lookup('env','NETBOX_TOKEN') }}"
-    # TLS verify toggles (optional envs; default true)
     zbx_validate_certs: "{{ (lookup('env','ZABBIX_VERIFY') | default('true')) | bool }}"
     nb_validate_certs:  "{{ (lookup('env','NETBOX_VERIFY')  | default('true')) | bool }}"
-    # Removal mode: 'disable' (default) or 'delete'
     remove_mode: "{{ lookup('env','ZBX_REMOVE_MODE') | default('disable') }}"
 
   tasks:
-    # -------- Resolve endpoints from multiple possible env names --------
     - name: Resolve Zabbix base URL from env
       set_fact:
         _zbx_base_raw: >-
@@ -39,26 +35,22 @@
             | regex_replace('\s+$','')
           }}
 
-    - name: Canonicalise endpoints
+    - name: Canonicalise bases (strip query/fragment and trailing slash)
       set_fact:
-        # Trim query/fragment, trailing slashes
         _zbx_base: "{{ _zbx_base_raw | regex_replace('[?#].*$','') | regex_replace('/+$','') }}"
         _nb_base:  "{{ _nb_base_raw  | regex_replace('[?#].*$','') | regex_replace('/+$','') }}"
-        # Build JSON-RPC endpoint
-        _zbx_api: >-
-          {{ (_zbx_base
-               | regex_replace('/api_jsonrpc\.php$','', ignorecase=True)) ~ '/api_jsonrpc.php' }}
-        # NetBox modules want the *site* base (no /api). Keep both for clarity.
-        _nb_api: >-
-          {{ (_nb_base
-               | regex_replace('/api$','', ignorecase=True)) ~ '/api' }}
+
+    - name: Build effective endpoints
+      set_fact:
+        _zbx_api: "{{ (_zbx_base | regex_replace('/api_jsonrpc\\.php$','', ignorecase=True)) ~ '/api_jsonrpc.php' }}"
+        _nb_api:  "{{ (_nb_base  | regex_replace('/api$','', ignorecase=True)) ~ '/api' }}"
 
     - name: Validate endpoints
       assert:
         that:
           - _zbx_base is search('^https?://')
           - _nb_base  is search('^https?://')
-          - _zbx_api is search('api_jsonrpc\.php$')
+          - _zbx_api is search('api_jsonrpc\\.php$')
           - _nb_api  is search('/api$')
         fail_msg: >-
           Missing/invalid endpoints.
@@ -73,14 +65,12 @@
           netbox_base_for_module: "{{ _nb_base }}"
           netbox_api_for_reference: "{{ _nb_api }}"
 
-    # -------- Pick host name --------
     - name: Determine Zabbix host name to remove
       set_fact:
         _zbx_host: >-
           {{ hostvars[inventory_hostname].zabbix_name
              | default(hostvars[inventory_hostname].name | default(inventory_hostname)) }}
 
-    # -------- Query Zabbix --------
     - name: Lookup host in Zabbix
       uri:
         url: "{{ _zbx_api }}"
@@ -109,7 +99,6 @@
       debug:
         msg: "Host '{{ _zbx_host }}' not found in Zabbix; nothing to do."
 
-    # -------- Disable or delete --------
     - name: Disable host in Zabbix (soft removal)
       when:
         - _zbx_hostid is defined
@@ -125,7 +114,7 @@
           method: "host.update"
           params:
             hostid: "{{ _zbx_hostid }}"
-            status: 1     # 0=enabled, 1=disabled
+            status: 1
           auth: "{{ zbx_token }}"
           id: 2
         validate_certs: "{{ zbx_validate_certs }}"
@@ -148,7 +137,6 @@
           id: 3
         validate_certs: "{{ zbx_validate_certs }}"
 
-    # -------- Optional NetBox write-back --------
     - name: Optional NetBox write-back (clear sync hint)
       when: hostvars[inventory_hostname].custom_fields is defined
       block:
