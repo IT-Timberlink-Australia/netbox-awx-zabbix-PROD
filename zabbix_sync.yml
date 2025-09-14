@@ -1,30 +1,22 @@
 - name: Sync NetBox hosts into Zabbix (token-only)
   hosts: all
+  become: false
   connection: local
   gather_facts: false
 
   vars:
-    # AWX env/cred vars
-    zbx_url:   "{{ lookup('env','ZABBIX_API_URL') }}"    
+    zbx_url:   "{{ lookup('env','ZABBIX_API_URL') }}"
     zbx_token: "{{ lookup('env','ZABBIX_API_TOKEN') }}"
     zbx_verify: "{{ (lookup('env','ZABBIX_VERIFY') | default('false')) | bool }}"
-    nb_url:    "{{ lookup('env','NETBOX_API') }}"       
+    nb_url:    "{{ lookup('env','NETBOX_API') }}"
     nb_token:  "{{ lookup('env','NETBOX_TOKEN') }}"
-    nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('false')) | bool }}"
+    nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('true')) | bool }}"
 
-    # Zabbix default ports by interface type
     _iface_default_ports:
-      "1": "10050"   # Agent
-      "2": "161"     # SNMP
-      "3": "623"     # IPMI
-      "4": "12345"   # JMX
-
-    zbp_status_value_map:
-      "Not Synced": "not_synced"
-      "Synced": "synced"
-      "Remove Pending": "remove_pending"
-      "Removed": "removed"
-      "NA": "na"
+      "1": "10050"
+      "2": "161"
+      "3": "623"
+      "4": "12345"
 
   tasks:
     - name: Validate inputs present
@@ -35,7 +27,6 @@
           - (nb_url    | length) > 0
           - (nb_token  | length) > 0
 
-    # ---------- Zabbix URL parsing (robust; no doubled api_jsonrpc.php) ----------
     - name: Parse Zabbix URL (phase 1)
       set_fact:
         zbx_scheme_https: "{{ zbx_url | regex_search('^https://') is truthy }}"
@@ -61,7 +52,6 @@
             | regex_replace('^$','/')
           }}
 
-    # ---------- NetBox URL normalize ----------
     - name: Normalize NetBox URL (clean)
       set_fact:
         _nb_clean: "{{ nb_url | regex_replace('/+$','') }}"
@@ -71,7 +61,6 @@
         nb_api_root: "{{ (_nb_clean | regex_search('/api$')) | ternary(_nb_clean, _nb_clean ~ '/api') }}"
         nb_base:     "{{ _nb_clean | regex_replace('/api$','') }}"
 
-    # ---------- Probe CF presence for write-back ----------
     - name: Probe NetBox CF zbp_last_sync
       uri:
         url: "{{ nb_api_root }}/extras/custom-fields/?name=zbp_last_sync"
@@ -97,7 +86,20 @@
         _has_last_sync: "{{ (_probe_last_sync.json.results | default([]) | length) > 0 }}"
         _has_sync_hint: "{{ (_probe_sync_hint.json.results | default([]) | length) > 0 }}"
 
-    # ---------- Normalize vars from NetBox inventory ----------
+    - name: Detect templated strings inside NetBox custom_fields
+      vars:
+        _cf_raw: "{{ hostvars[inventory_hostname].custom_fields | default({}) }}"
+        _cf_suspicious: >-
+          {{
+            _cf_raw | dict2items
+            | selectattr('value','string')
+            | selectattr('value','search','({{|}}|#)')
+            | map(attribute='key') | list
+          }}
+      fail:
+        msg: "Device {{ inventory_hostname }} has templated content in NetBox custom_fields: {{ _cf_suspicious }}"
+      when: _cf_suspicious | length > 0
+
     - name: Normalize host vars from NetBox
       vars:
         cf: "{{ hostvars[inventory_hostname].custom_fields | default({}) }}"
@@ -183,11 +185,9 @@
         that: [ (_proxy_chk.json.result | length | int) == 1 ]
         fail_msg: "Zabbix proxy id {{ _proxy_id_int }} not found or token lacks permission."
 
-    # ---------- Zabbix host upsert + reconcile + NetBox writeback ----------
     - name: Zabbix host upsert + reconcile + NetBox writeback
       block:
 
-        # Get host
         - name: ZBX host.get by name
           uri:
             url: "{{ zbx_api }}"
@@ -209,7 +209,6 @@
           set_fact:
             _hostid: "{{ (_host_get.json.result[0].hostid) if (_host_get.json.result|length) else omit }}"
 
-        # Build arrays
         - name: Build Zabbix arrays
           set_fact:
             _zbx_groups_json: >-
@@ -226,7 +225,6 @@
                 {% if _tag_nb_status|default('') %}, {"tag":"nb_status","value":"{{ _tag_nb_status }}"}{% endif %}
               ]
 
-        # Create or update host (replace groups & templates). No Jinja blocks inside mappings!
         - name: ZBX host.create (if absent)
           when: _hostid is not defined
           uri:
@@ -283,8 +281,7 @@
                 templates: "{{ _zbx_templates_json | from_yaml }}"
                 proxy_hostid: "{{ ((_proxy_id_int | int) > 0) | ternary((_proxy_id_int | int) | string, '0') }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
-
-        # Ensure only one primary interface with correct type/IP
+       
         - name: Fetch interfaces
           uri:
             url: "{{ zbx_api }}"
@@ -314,7 +311,7 @@
           vars:
             _match: "{{ _cur_ifaces | selectattr('main','equalto','1') | selectattr('type','equalto', (_iface_type | int)) | selectattr('ip','equalto', _iface_ip) | list }}"
           block:
-            - name: Delete all existing interfaces if they don’t match
+            - name: Delete all existing interfaces if they dont match
               when: _match | length == 0 and _cur_ifaces | length > 0
               uri:
                 url: "{{ zbx_api }}"
@@ -352,13 +349,22 @@
                     port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
                     details: "{{ _iface_details | default(omit) }}"
 
+        - name: Sanitize sync error string for NetBox
+          set_fact:
+            _sync_err_safe: >-
+              {{
+                (_sync_err | string)
+                | regex_replace('[\r\n]+',' | ')
+                | regex_replace('{{','⟪⟪')
+                | regex_replace('}}','⟫⟫')
+                | regex_replace('#','﹟')
+              }}
+
         - name: Build success payload
           set_fact:
             _cf_success: >-
               {{
-                {'zbp_status':'synced'}
-                | combine( (_has_last_sync|bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)
-                | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': ''}, {}),                     recursive=True)
+                {'zbp_status':'synced'}| combine( (_has_last_sync|bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)| combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': ''}, {}), recursive=True)
               }}
 
         - name: Success writeback → NetBox (Device)
@@ -394,8 +400,7 @@
           set_fact:
             _cf_fail: >-
               {{
-                {'zbp_status':'not_synced'}
-                | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': _sync_err}, {}), recursive=True)
+                {'zbp_status':'not_synced'}| combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': _sync_err}, {}), recursive=True)
               }}
 
         - name: Failure writeback → NetBox (Device)
