@@ -41,12 +41,20 @@
       set_fact:
         zbx_api: >-
           {{
-          {{
-            (zbx_url | regex_replace('[?#].*$', '') | regex_replace('/+$',''))
-            | regex_replace('(?i)/api_jsonrpc\.php$','')
-            ~ '/api_jsonrpc.php'
+            (zbx_url
+              | regex_replace('[?#].*$','')
+              | regex_replace('/+$','')
+              | regex_replace('/api_jsonrpc\.php$','', ignorecase=True)
+            ) ~ '/api_jsonrpc.php'
           }}
+        zbx_path_clean: "{{ zbx_path_only | regex_replace('/+$','') }}"
         _auth: "{{ zbx_token }}"
+
+    - name: Validate Zabbix API URL formatting
+      assert:
+        that:
+          - zbx_api is search('api_jsonrpc\.php$')
+        fail_msg: "ZABBIX_API_URL must end with /api_jsonrpc.php (got: {{ zbx_api }})"
 
     - name: Parse Zabbix URL (phase 3)
       set_fact:
