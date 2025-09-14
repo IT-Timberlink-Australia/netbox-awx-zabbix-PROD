@@ -11,6 +11,8 @@
     nb_url:    "{{ lookup('env','NETBOX_API') }}"
     nb_token:  "{{ lookup('env','NETBOX_TOKEN') }}"
     nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('true')) | bool }}"
+    ZBP_STATUS_SYNCED_VALUE: "{{ lookup('env','ZBP_STATUS_SYNCED_VALUE') | default('synced') }}"
+    ZBP_STATUS_NOTSYNCED_VALUE: "{{ lookup('env','ZBP_STATUS_NOTSYNCED_VALUE') | default('not_synced') }}"
 
     _iface_default_ports:
       "1": "10050"
@@ -363,9 +365,15 @@
           set_fact:
             _cf_success: >-
               {{
-                {'zbp_status':'synced'}
-                | combine( (_has_last_sync|bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)
-                | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': ''}, {}), recursive=True)
+                {'zbp_status': ZBP_STATUS_SYNCED_VALUE}
+                | combine(
+                    (_has_last_sync|bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}),
+                    recursive=True
+                  )
+                | combine(
+                    (_has_sync_hint|bool) | ternary({'zbp_sync_hint': ''}, {}),
+                    recursive=True
+                  )
               }}
 
         - name: Success writeback → NetBox (Device)
@@ -397,12 +405,21 @@
           set_fact:
             _sync_err: "{{ (ansible_failed_result.msg | default(ansible_failed_task.name | default('Zabbix sync failed'))) }}"
 
+        - name: Sanitize sync error string
+          set_fact:
+            _sync_err_safe: >-
+              {{
+                (_sync_err | string)
+                | regex_replace('[\r\n]+',' | ')
+                | regex_replace('{{','⟪⟪') | regex_replace('}}','⟫⟫') | regex_replace('#','﹟')
+              }}
+
         - name: Build failure payload
           set_fact:
             _cf_fail: >-
               {{
-                {'zbp_status': 'not'}
-                | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': _sync_err}, {}), recursive=True)
+                {'zbp_status': ZBP_STATUS_NOTSYNCED_VALUE}
+                | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': _sync_err_safe}, {}), recursive=True)
               }}
 
         - name: Failure writeback → NetBox (Device)
