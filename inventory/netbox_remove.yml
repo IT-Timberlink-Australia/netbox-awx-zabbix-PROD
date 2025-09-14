@@ -11,4 +11,4 @@ compose:
 zbx_status: custom_fields.zbp_status
 
 groups:
-status_remove_pending: "{{ zbx_status == 'Remove Pending' }}"
+status_remove_pending: "{{ zbx_status == 'remove_pending' }}"
