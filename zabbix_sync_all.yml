@@ -394,7 +394,7 @@
           set_fact:
             _cf_fail: >-
               {{
-                {'zbp_status': 'Not Synced'}
+                {'zbp_status': 'not'}
                 | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': _sync_err}, {}), recursive=True)
               }}
 
