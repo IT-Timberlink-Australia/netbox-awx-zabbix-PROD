@@ -5,7 +5,6 @@
   gather_facts: false
 
   vars:
-    # AWX env/cred vars
     zbx_url:   "{{ lookup('env','ZABBIX_API_URL') }}"
     zbx_token: "{{ lookup('env','ZABBIX_API_TOKEN') }}"
     zbx_verify: "{{ (lookup('env','ZABBIX_VERIFY') | default('false')) | bool }}"
@@ -13,7 +12,6 @@
     nb_token:  "{{ lookup('env','NETBOX_TOKEN') }}"
     nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('true')) | bool }}"
 
-    # Zabbix default ports by interface type
     _iface_default_ports:
       "1": "10050"
       "2": "161"
@@ -29,7 +27,7 @@
           - (nb_url    | length) > 0
           - (nb_token  | length) > 0
 
-    # ---------- Zabbix URL parsing (robust; no doubled api_jsonrpc.php) ----------
+
     - name: Parse Zabbix URL (phase 1)
       set_fact:
         zbx_scheme_https: "{{ zbx_url | regex_search('^https://') is truthy }}"
@@ -55,7 +53,7 @@
             | regex_replace('^$','/')
           }}
 
-    # ---------- NetBox URL normalize ----------
+
     - name: Normalize NetBox URL (clean)
       set_fact:
         _nb_clean: "{{ nb_url | regex_replace('/+$','') }}"
@@ -65,7 +63,7 @@
         nb_api_root: "{{ (_nb_clean | regex_search('/api$')) | ternary(_nb_clean, _nb_clean ~ '/api') }}"
         nb_base:     "{{ _nb_clean | regex_replace('/api$','') }}"
 
-    # ---------- Probe CF presence for write-back ----------
+
     - name: Probe NetBox CF zbp_last_sync
       uri:
         url: "{{ nb_api_root }}/extras/custom-fields/?name=zbp_last_sync"
@@ -91,7 +89,6 @@
         _has_last_sync: "{{ (_probe_last_sync.json.results | default([]) | length) > 0 }}"
         _has_sync_hint: "{{ (_probe_sync_hint.json.results | default([]) | length) > 0 }}"
 
-    # ---------- Normalize vars from NetBox inventory ----------
     - name: Normalize host vars from NetBox
       vars:
         cf: "{{ hostvars[inventory_hostname].custom_fields | default({}) }}"
@@ -177,11 +174,9 @@
         that: [ (_proxy_chk.json.result | length | int) == 1 ]
         fail_msg: "Zabbix proxy id {{ _proxy_id_int }} not found or token lacks permission."
 
-    # ---------- Zabbix host upsert + reconcile + NetBox writeback ----------
     - name: Zabbix host upsert + reconcile + NetBox writeback
       block:
 
-        # Get host
         - name: ZBX host.get by name
           uri:
             url: "{{ zbx_api }}"
@@ -203,7 +198,6 @@
           set_fact:
             _hostid: "{{ (_host_get.json.result[0].hostid) if (_host_get.json.result|length) else omit }}"
 
-        # Build arrays
         - name: Build Zabbix arrays
           set_fact:
             _zbx_groups_json: >-
@@ -220,8 +214,7 @@
                 {% if _tag_nb_status|default('') %}, {"tag":"nb_status","value":"{{ _tag_nb_status }}"}{% endif %}
               ]
 
-        # Create or update host (replace groups & templates). No Jinja blocks inside mappings!
-        - name: ZBX host.create (if absent)
+       
           when: _hostid is not defined
           uri:
             url: "{{ zbx_api }}"
@@ -278,7 +271,7 @@
                 proxy_hostid: "{{ ((_proxy_id_int | int) > 0) | ternary((_proxy_id_int | int) | string, '0') }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
 
-        # Ensure only one primary interface with correct type/IP
+       
         - name: Fetch interfaces
           uri:
             url: "{{ zbx_api }}"
@@ -346,7 +339,7 @@
                     port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
                     details: "{{ _iface_details | default(omit) }}"
 
-        # Success write-back
+      
         - name: Build success payload
           set_fact:
             _cf_success: >-
