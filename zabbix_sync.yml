@@ -1,16 +1,14 @@
 - name: Sync NetBox hosts into Zabbix (token-only)
-  hosts: all
+  hosts: BEL-01AP01
   connection: local
   gather_facts: false
 
   vars:
-    ZBP_STATUS_SYNCED_VALUE: "{{ lookup('env','ZBP_STATUS_SYNCED_VALUE') | default('Synced') }}"
-    ZBP_STATUS_NOTSYNCED_VALUE: "{{ lookup('env','ZBP_STATUS_NOTSYNCED_VALUE') | default('Not Synced') }}"
     # AWX env/cred vars
-    zbx_url:   "{{ lookup('env','ZABBIX_API_URL') | default(lookup('env','ZABBIX_URL'), true) | default(lookup('env','ZABBIX_HOST_URL'), true) }}"
+    zbx_url:   "{{ lookup('env','ZABBIX_API_URL') }}"     # https://itmonitor.../zabbix/api_jsonrpc.php
     zbx_token: "{{ lookup('env','ZABBIX_API_TOKEN') }}"
     zbx_verify: "{{ (lookup('env','ZABBIX_VERIFY') | default('false')) | bool }}"
-    nb_url:    "{{ lookup('env','NETBOX_API') | default(lookup('env','NETBOX_URL'), true) | default(lookup('env','NETBOX_HOST_URL'), true) }}"
+    nb_url:    "{{ lookup('env','NETBOX_API') }}"         # https://netbox...  (base or /api)
     nb_token:  "{{ lookup('env','NETBOX_TOKEN') }}"
     nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('true')) | bool }}"
 
@@ -41,20 +39,12 @@
       set_fact:
         zbx_api: >-
           {{
-            (zbx_url
-              | regex_replace('[?#].*$','')
-              | regex_replace('/+$','')
-              | regex_replace('/api_jsonrpc\.php$','', ignorecase=True)
-            ) ~ '/api_jsonrpc.php'
+            (zbx_url | regex_replace('/+$',''))
+            | regex_replace('(?i)/api_jsonrpc\\.php$','')
+            ~ '/api_jsonrpc.php'
           }}
         zbx_path_clean: "{{ zbx_path_only | regex_replace('/+$','') }}"
         _auth: "{{ zbx_token }}"
-
-    - name: Validate Zabbix API URL formatting
-      assert:
-        that:
-          - zbx_api is search('api_jsonrpc\.php$')
-        fail_msg: "ZABBIX_API_URL must end with /api_jsonrpc.php (got: {{ zbx_api }})"
 
     - name: Parse Zabbix URL (phase 3)
       set_fact:
@@ -215,8 +205,11 @@
 
         - name: Cache hostid if exists
           set_fact:
-            _hostid: "{{ (_host_get.json.result[0].hostid) if ((_host_get.json.result | default([]) | length) > 0) else omit }}"
+            _hostid: >-
+              {{ (_host_get.json.result | default([]) | length) > 0
+                 | ternary((_host_get.json.result[0].hostid | string), omit) }}
             _host_present: "{{ (_host_get.json.result | default([]) | length) > 0 }}"
+
         # Build arrays
         - name: Build Zabbix arrays
           set_fact:
@@ -233,6 +226,17 @@
                 {% if _tag_sla|default('') %}, {"tag":"device","value":"{{ _tag_sla }}"}{% endif %}
                 {% if _tag_nb_status|default('') %}, {"tag":"nb_status","value":"{{ _tag_nb_status }}"}{% endif %}
               ]
+
+        - name: Derive desired Zabbix status from NetBox status (active=enabled, else disabled)
+          set_fact:
+            _nb_status_norm: >-
+              {{
+                (hostvars[inventory_hostname].status.value
+                 | default(hostvars[inventory_hostname].status | string, true)
+                 | default('', true))
+                | string | lower
+              }}
+            _zbx_desired_status: "{{ 0 if _nb_status_norm == 'active' else 1 }}"
 
         # Create or update host (replace groups & templates). No Jinja blocks inside mappings!
         - name: ZBX host.create (if absent)
@@ -255,7 +259,7 @@
                 templates: "{{ _zbx_templates_json | from_yaml }}"
                 proxy_hostid: "{{ ((_proxy_id_int | int) > 0) | ternary((_proxy_id_int | int) | string, '0') }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
-                status: "{{ _zbx_desired_status }}"
+                status: "{{ _zbx_desired_status | default(1) }}"
                 interfaces:
                   - type: "{{ _iface_type | int }}"
                     main: 1
@@ -286,7 +290,7 @@
               auth: "{{ _auth }}"
               params:
                 hostid: "{{ _hostid }}"
-                status: "{{ _zbx_desired_status }}"
+                status: "{{ _zbx_desired_status | default(1) }}"
                 host: "{{ _nb_name }}"
                 name: "{{ _nb_visible }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
@@ -367,7 +371,7 @@
           set_fact:
             _cf_success: >-
               {{
-                {'zbp_status': ZBP_STATUS_SYNCED_VALUE}
+                {'zbp_status':'Synced'}
                 | combine( (_has_last_sync|bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)
                 | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': ''}, {}),                     recursive=True)
               }}
@@ -405,7 +409,7 @@
           set_fact:
             _cf_fail: >-
               {{
-                {'zbp_status': ZBP_STATUS_NOTSYNCED_VALUE}
+                {'zbp_status':'Not Synced'}
                 | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': _sync_err}, {}), recursive=True)
               }}
 
