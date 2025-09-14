@@ -1,5 +1,5 @@
 ---
-- name: Zabbix remove hosts (host-URL friendly, robust env fallbacks)
+- name: Zabbix remove hosts (host-URL friendly, v3 fixes for NetBox module URL)
   hosts: all
   connection: local
   become: false
@@ -41,37 +41,37 @@
 
     - name: Canonicalise endpoints
       set_fact:
-        _zbx_api_base: "{{ _zbx_base_raw | regex_replace('[?#].*$','') | regex_replace('/+$','') }}"
-        _nb_api_base:  "{{ _nb_base_raw  | regex_replace('[?#].*$','') | regex_replace('/+$','') }}"
+        # Trim query/fragment, trailing slashes
+        _zbx_base: "{{ _zbx_base_raw | regex_replace('[?#].*$','') | regex_replace('/+$','') }}"
+        _nb_base:  "{{ _nb_base_raw  | regex_replace('[?#].*$','') | regex_replace('/+$','') }}"
+        # Build JSON-RPC endpoint
         _zbx_api: >-
-          {{ (_zbx_base_raw
-               | regex_replace('[?#].*$','')
-               | regex_replace('/+$','')
+          {{ (_zbx_base
                | regex_replace('/api_jsonrpc\.php$','', ignorecase=True)) ~ '/api_jsonrpc.php' }}
+        # NetBox modules want the *site* base (no /api). Keep both for clarity.
         _nb_api: >-
-          {{ (_nb_base_raw
-               | regex_replace('[?#].*$','')
-               | regex_replace('/+$','')
+          {{ (_nb_base
                | regex_replace('/api$','', ignorecase=True)) ~ '/api' }}
 
     - name: Validate endpoints
       assert:
         that:
-          - _zbx_api_base is search('^https?://')
-          - _nb_api_base  is search('^https?://')
+          - _zbx_base is search('^https?://')
+          - _nb_base  is search('^https?://')
           - _zbx_api is search('api_jsonrpc\.php$')
           - _nb_api  is search('/api$')
         fail_msg: >-
           Missing/invalid endpoints.
-          Zabbix base='{{ _zbx_base_raw }}' api='{{ _zbx_api }}';
-          NetBox base='{{ _nb_base_raw }}' api='{{ _nb_api }}'.
+          Zabbix base='{{ _zbx_base }}' api='{{ _zbx_api }}';
+          NetBox base='{{ _nb_base }}' api='{{ _nb_api }}'.
           Expected ZABBIX_* to resolve to https://.../zabbix and NETBOX_* to https://... .
 
     - name: Show resolved endpoints
       debug:
         msg:
           zabbix_api: "{{ _zbx_api }}"
-          netbox_api: "{{ _nb_api }}"
+          netbox_base_for_module: "{{ _nb_base }}"
+          netbox_api_for_reference: "{{ _nb_api }}"
 
     # -------- Pick host name --------
     - name: Determine Zabbix host name to remove
@@ -164,7 +164,7 @@
           when: not (hostvars[inventory_hostname].is_virtual | default(false))
           delegate_to: localhost
           netbox.netbox.netbox_device:
-            netbox_url: "{{ _nb_api }}"
+            netbox_url: "{{ _nb_base }}"
             netbox_token: "{{ nb_token }}"
             validate_certs: "{{ nb_validate_certs }}"
             data:
@@ -176,7 +176,7 @@
           when: hostvars[inventory_hostname].is_virtual | default(false)
           delegate_to: localhost
           netbox.netbox.netbox_virtual_machine:
-            netbox_url: "{{ _nb_api }}"
+            netbox_url: "{{ _nb_base }}"
             netbox_token: "{{ nb_token }}"
             validate_certs: "{{ nb_validate_certs }}"
             data:
