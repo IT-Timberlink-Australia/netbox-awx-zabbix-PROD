@@ -205,7 +205,13 @@
 
     - name: Build interface details (SNMP only)
       set_fact:
-        _iface_details: "{{ {'version': 2, 'community': '{$SNMP_COMMUNITY}', 'bulk': 1} if (_iface_type | int) == 2 else omit }}"
+        _iface_details: "{{ {'version': 2, 'community': '{$SNMP_COMMUNITY}', 'bulk': 1} }}"
+      when: (_iface_type | int) == 2
+
+    - name: Set empty interface details for non-SNMP
+      set_fact:
+        _iface_details: "{{ {} }}"
+      when: (_iface_type | int) != 2
 
     - name: Normalize proxy id (robust)
       set_fact:
