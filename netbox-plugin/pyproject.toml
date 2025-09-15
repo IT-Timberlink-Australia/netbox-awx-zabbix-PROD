@@ -1,0 +1,15 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["netbox_zabbix"]
+fix = true
+cache-dir = ".ruff_cache"
+[tool.ruff.lint]
+# Lint rules (ruff does import sorting via "I")
+select = ["E", "F", "UP"]
+# Let Black handle wrapping; skip isinstance union nag for now
+ignore = ["E501", "UP038"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]

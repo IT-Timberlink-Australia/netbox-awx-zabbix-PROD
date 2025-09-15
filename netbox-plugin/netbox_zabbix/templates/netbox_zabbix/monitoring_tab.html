@@ -1,0 +1,58 @@
+{% extends "generic/object.html" %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header d-flex align-items-center">
+    <h5 class="mb-0">Zabbix Monitoring</h5>
+    <div class="ms-2">
+      {% if badge == "ok" %}
+        <span class="badge bg-success">✅ Synced</span>
+      {% elif badge == "caution" %}
+        <span class="badge bg-warning text-dark">⚠️ Not Synced</span>
+      {% else %}
+        <span class="badge bg-danger">❌ Missing Data</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card-body">
+    <div class="row">
+      <div class="col-12 col-lg-6">
+        <table class="table table-sm table-hover">
+          <tbody>
+            {% for row in items|slice:":7" %}
+              <tr>
+                <th class="w-50">{{ row.label }}</th>
+                <td>{{ row.display|default:"—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="col-12 col-lg-6">
+        <table class="table table-sm table-hover">
+          <tbody>
+            {% for row in items|slice:"7:" %}
+              <tr>
+                <th class="w-50">{{ row.label }}</th>
+                <td>{{ row.display|default:"—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% if missing %}
+      <div class="alert alert-warning mt-2">
+        <strong>Missing:</strong> {{ missing|join:", " }}
+      </div>
+    {% endif %}
+
+    <div class="mt-3 small text-muted">
+      <strong>Legend:</strong>
+      ✅ Synced &nbsp;|&nbsp; ⚠️ Not Synced (ready to push) &nbsp;|&nbsp; ❌ Missing Data
+    </div>
+  </div>
+</div>
+{% endblock %}
