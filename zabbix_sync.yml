@@ -208,10 +208,15 @@
         _iface_details: "{{ {'version': 2, 'community': '{$SNMP_COMMUNITY}', 'bulk': 1} }}"
       when: (_iface_type | int) == 2
 
-    - name: Set empty interface details for non-SNMP
+    - name: Build interface details (Agent with PSK)
+      set_fact:
+        _iface_details: "{{ {'tls_connect': 2, 'tls_accept': 2, 'tls_psk_identity': '{$PSK_IDNET}', 'tls_psk': '{$PSK_KEY}' }}"
+      when: (_iface_type | int) == 1
+
+    - name: Set empty interface details for other types
       set_fact:
         _iface_details: "{{ {} }}"
-      when: (_iface_type | int) != 2
+      when: (_iface_type | int) not in [1, 2]
 
     - name: Normalize proxy id (robust)
       set_fact:
