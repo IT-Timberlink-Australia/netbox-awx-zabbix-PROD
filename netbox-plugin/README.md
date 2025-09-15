@@ -8,6 +8,8 @@ AWX/Ansible can then consume a clean REST feed to sync hosts to Zabbix.
 - REST API with a `/sync/` endpoint returning pre-resolved host data for AWX.
 - Uses `NetBoxModel` for change logging, tags, journaling, and webhooks.
 
+adding test change
+
 ## Install (svrnmnb01)
 1. Copy this repo onto your NetBox host (e.g., `/opt/netbox/plugins/netbox-zabbix`).
 2. Install into NetBox's venv:
