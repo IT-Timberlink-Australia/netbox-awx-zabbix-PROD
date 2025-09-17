@@ -5,10 +5,10 @@ strict: false
 
 # Only hosts pending removal
 query_filters:
-- cf_zbp_status: "remove_pending"
+- cf_zbp_status: "Remove Pending"
 
 compose:
 zbx_status: custom_fields.zbp_status
 
 groups:
-status_remove_pending: "{{ zbx_status == 'remove_pending' }}"
+status_remove_pending: "{{ zbx_status == 'Remove Pending' }}"

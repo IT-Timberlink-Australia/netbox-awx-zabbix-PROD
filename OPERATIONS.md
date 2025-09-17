@@ -3,8 +3,8 @@
 ## What lives here
 - `zabbix_sync.yml` — Sync/Upsert NetBox Devices/VMs into Zabbix and write status back into NetBox.
 - `zabbix_remove.yml` — Disable/Delete hosts in Zabbix and mark them `Removed` in NetBox.
-- `inventory/netbox.yml` — Targets items with `zbp_status: "not_synced"`.
-- `inventory/netbox_remove.yml` — Targets items with `zbp_status: "remove_pending"`.
+- `inventory/netbox.yml` — Targets items with `zbp_status: "Not Synced"`.
+- `inventory/netbox_remove.yml` — Targets items with `zbp_status: "Remove Pending"`.
 
 ## Required environment variables
 NETBOX_API, NETBOX_TOKEN, NETBOX_VERIFY
