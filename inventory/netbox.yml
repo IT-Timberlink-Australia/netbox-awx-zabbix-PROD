@@ -13,4 +13,4 @@ zbx_status: custom_fields.zbp_status
 # Create a single, explicit status group
 # (No keyed_groups; this works across all plugin versions)
 groups:
-status_ready: "{{ zbx_status == 'not_synced' }}"
+status_ready: "{{ zbx_status == 'Not Synced' }}"

@@ -19,4 +19,4 @@ ansible-playbook -i inventory/netbox.yml zabbix_sync.yml --syntax-check
 
 ## Notes
 - TLS: start with ZABBIX_VERIFY=false, flip to true once the CA is in the EE.
-- Statuses used in NetBox: not_synced → synced → remove_pending → removed.
+- Statuses used in NetBox: Not Synced → Synced → Remove Pending → Removed.

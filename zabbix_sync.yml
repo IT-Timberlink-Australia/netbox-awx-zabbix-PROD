@@ -210,7 +210,11 @@
 
     - name: Build interface details (Agent with PSK)
       set_fact:
-        _iface_details: "{{ dict(tls_connect=2, tls_accept=2, tls_psk_identity='tl-agent-bel-psk', tls_psk='188ffc5a6a83ac39be5b6fa4284d4c38948808623905ffb8ea437e19380d541b') }}"
+        _iface_details:
+          tls_connect: 2
+          tls_accept: 2
+          tls_psk_identity: 'tl-agent-bel-psk'
+          tls_psk: '188ffc5a6a83ac39be5b6fa4284d4c38948808623905ffb8ea437e19380d541b'
       when: (_iface_type | int) == 1
 
     - name: Set empty interface details for other types
@@ -434,11 +438,11 @@
         - name: Build success payload
           set_fact:
             _cf_success: >-
-              {{
-                {'zbp_status':'synced'}
-                | combine( (_has_last_sync|bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)
-                | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': ''}, {}),                     recursive=True)
-              }}
+                  {{
+                    {'zbp_status':'Synced'}
+                    | combine( (_has_last_sync|bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)
+                    | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': ''}, {}),                     recursive=True)
+                  }}
 
         - name: Success writeback → NetBox (Device)
           when: not (hostvars[inventory_hostname].is_virtual | default(false))
@@ -472,10 +476,10 @@
         - name: Build failure payload
           set_fact:
             _cf_fail: >-
-              {{
-                {'zbp_status':'not_synced'}
-                | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': _sync_err}, {}), recursive=True)
-              }}
+                  {{
+                    {'zbp_status':'Not Synced'}
+                    | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': _sync_err}, {}), recursive=True)
+                  }}
 
         - name: Failure writeback → NetBox (Device)
           when: not (hostvars[inventory_hostname].is_virtual | default(false))
