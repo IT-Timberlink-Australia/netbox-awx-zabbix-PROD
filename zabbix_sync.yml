@@ -222,9 +222,19 @@
         _iface_details: "{{ {} }}"
       when: (_iface_type | int) not in [1, 2]
 
+    - name: Debug proxy data from NetBox
+      debug:
+        msg: 
+          - "Raw proxy data from NetBox: '{{ _proxy_cf_raw }}'"
+          - "Type: {{ _proxy_cf_raw | type_debug }}"
+
     - name: Normalize proxy id (robust)
       set_fact:
         _proxy_id_int: "{{ ((_proxy_cf_raw | string) | regex_search('\\d+') | default('0')) | int }}"
+
+    - name: Debug normalized proxy id
+      debug:
+        msg: "Normalized proxy ID: {{ _proxy_id_int }}"
 
     - name: Validate proxy id in Zabbix (when provided)
       when: (_proxy_id_int | int) > 0
@@ -307,6 +317,10 @@
             _zbx_desired_status: "{{ 0 if _nb_status_norm == 'active' else 1 }}"
 
         # Create or update host (replace groups & templates). No Jinja blocks inside mappings!
+        - name: Debug proxy_hostid being sent to Zabbix (create)
+          debug:
+            msg: "Proxy hostid being sent to Zabbix (create): {{ _proxy_id_int if (_proxy_id_int | int) > 0 else 0 }}"
+
         - name: ZBX host.create (if absent)
           when: _hostid is not defined
           uri:
@@ -342,6 +356,10 @@
           when: _hostid is not defined
           set_fact:
             _hostid: "{{ _host_create.json.result.hostids[0] }}"
+
+        - name: Debug proxy_hostid being sent to Zabbix (update)
+          debug:
+            msg: "Proxy hostid being sent to Zabbix (update): {{ _proxy_id_int if (_proxy_id_int | int) > 0 else 0 }}"
 
         - name: ZBX host.update (if present)
           when: _hostid is defined
