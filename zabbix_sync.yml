@@ -392,8 +392,17 @@
               - "Host create status: {{ _host_create.status | default('No status') }}"
               - "Host create msg: {{ _host_create.msg | default('No message') }}"
 
+        - name: Debug host.create failure
+          when: _hostid is not defined and (_host_create.json is not defined or _host_create.json.result is not defined)
+          debug:
+            msg:
+              - "Host create failed - cannot cache hostid"
+              - "Response: {{ _host_create.json | default('No JSON response') }}"
+              - "Status: {{ _host_create.status | default('No status') }}"
+              - "Message: {{ _host_create.msg | default('No message') }}"
+
         - name: Cache hostid from create
-          when: _hostid is not defined
+          when: _hostid is not defined and _host_create.json is defined and _host_create.json.result is defined
           set_fact:
             _hostid: "{{ _host_create.json.result.hostids[0] }}"
 
