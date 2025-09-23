@@ -122,15 +122,51 @@
           id: 99
       register: zbx_version
       delegate_to: localhost
+      ignore_errors: true
 
     - name: Debug Zabbix version
       debug:
-        msg: "Zabbix version: {{ zbx_version.json.result }}"
+        msg: "Zabbix version: {{ zbx_version.json.result | default('Version check failed') }}"
+      when: zbx_version.json is defined and zbx_version.json.result is defined
+
+    - name: Debug Zabbix version check failure
+      debug:
+        msg:
+          - "Failed to get Zabbix version"
+          - "Response: {{ zbx_version.json | default('No JSON response') }}"
+          - "Status: {{ zbx_version.status | default('No status') }}"
+      when: zbx_version.json is not defined or zbx_version.json.result is not defined
 
     # # one-off sanity
     # - debug:
     #     msg: { zbx_api: "{{ zbx_api }}", zbx_hostport: "{{ zbx_hostport }}", zbx_pathroot: "{{ zbx_pathroot }}" }
     #   verbosity: 1
+
+    # ---------- Alternative Zabbix version check via proxy validation ----------
+    - name: Check Zabbix version via proxy.get (fallback)
+      uri:
+        url: "{{ zbx_api }}"
+        method: POST
+        headers: { Content-Type: "application/json-rpc" }
+        body_format: json
+        validate_certs: "{{ zbx_verify }}"
+        body:
+          jsonrpc: "2.0"
+          method: "proxy.get"
+          id: 98
+          auth: "{{ _auth }}"
+          params:
+            output: ["proxyid", "name"]
+            limit: 1
+      register: zbx_version_fallback
+      delegate_to: localhost
+      ignore_errors: true
+      when: zbx_version.json is not defined or zbx_version.json.result is not defined
+
+    - name: Debug Zabbix API connectivity
+      debug:
+        msg: "Zabbix API is accessible (proxy.get method works)"
+      when: zbx_version_fallback.json is defined and zbx_version_fallback.json.result is defined
 
     # ---------- NetBox URL normalize ----------
     - name: Normalize NetBox URL (clean)
