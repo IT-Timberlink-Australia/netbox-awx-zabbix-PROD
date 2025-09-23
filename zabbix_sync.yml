@@ -224,9 +224,15 @@
 
     - name: Debug proxy data from NetBox
       debug:
-        msg: 
+        msg:
           - "Raw proxy data from NetBox: '{{ _proxy_cf_raw }}'"
           - "Type: {{ _proxy_cf_raw | type_debug }}"
+
+    - name: Debug PSK configuration
+      debug:
+        msg:
+          - "Interface Type: {{ _iface_type }}"
+          - "PSK will be applied for Agent interfaces (type 1)"
 
     - name: Normalize proxy id (robust)
       set_fact:
