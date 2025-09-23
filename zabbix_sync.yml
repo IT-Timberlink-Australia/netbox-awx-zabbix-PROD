@@ -342,44 +342,28 @@
         - name: Build host.create request body
           when: _hostid is not defined
           set_fact:
-            _host_create_body: "{{ _host_create_body | from_json }}"
-          vars:
-            _host_create_body: |
-              {
-                "jsonrpc": "2.0",
-                "method": "host.create",
-                "id": 2,
-                "auth": "{{ _auth }}",
-                "params": {
-                  "host": "{{ _nb_name }}",
-                  "name": "{{ _nb_visible }}",
-                  "groups": {{ _zbx_groups_json | from_yaml | to_json }},
-                  "templates": {{ _zbx_templates_json | from_yaml | to_json }},
-                  "proxy_hostid": {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }},
-                  "monitored_by": {{ 1 if (_proxy_id_int | int) > 0 else 0 }},
-                  "tags": {{ _zbx_tags_json | from_yaml | to_json }},
-                  "status": {{ _zbx_desired_status | default(1) }},
-                  "interfaces": [
-                    {
-                      "type": {{ _iface_type | int }},
-                      "main": 1,
-                      "useip": 1,
-                      "ip": "{{ _iface_ip }}",
-                      "dns": "",
-                      "port": "{{ _iface_default_ports[_iface_type] | default('10050') }}",
-                      "details": {{ _iface_details | default({}) | to_json }}
-                    }
-                  ]
-                }
-              }
-
-        - name: Debug host.create request body
-          when: _hostid is not defined
-          debug:
-            msg: "Host create request body: {{ _host_create_body | to_nice_json }}"
-
-        - name: Debug proxy_hostid in request body
-          when: _hostid is not defined
+            _host_create_body:
+              jsonrpc: "2.0"
+              method: "host.create"
+              id: 2
+              auth: "{{ _auth }}"
+              params:
+                host: "{{ _nb_name }}"
+                name: "{{ _nb_visible }}"
+                groups: "{{ _zbx_groups_json | from_yaml }}"
+                templates: "{{ _zbx_templates_json | from_yaml }}"
+                proxy_hostid: "{{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
+                monitored_by: "{{ 1 if (_proxy_id_int | int) > 0 else 0 }}"
+                tags: "{{ _zbx_tags_json | from_yaml }}"
+                status: "{{ _zbx_desired_status | default(1) }}"
+                interfaces:
+                  - type: "{{ _iface_type | int }}"
+                    main: 1
+                    useip: 1
+                    ip: "{{ _iface_ip }}"
+                    dns: ""
+                    port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
+                    details: "{{ _iface_details | default(omit) }}"
           debug:
             msg:
               - "proxy_hostid value: {{ _host_create_body.params.proxy_hostid }}"
@@ -418,26 +402,20 @@
         - name: Build host.update request body
           when: _hostid is defined
           set_fact:
-            _host_update_body: "{{ _host_update_body | from_json }}"
-          vars:
-            _host_update_body: |
-              {
-                "jsonrpc": "2.0",
-                "method": "host.update",
-                "id": 3,
-                "auth": "{{ _auth }}",
-                "params": {
-                  "hostid": "{{ _hostid }}",
-                  "status": {{ _zbx_desired_status | default(1) }},
-                  "host": "{{ _nb_name }}",
-                  "name": "{{ _nb_visible }}",
-                  "groups": {{ _zbx_groups_json | from_yaml | to_json }},
-                  "templates": {{ _zbx_templates_json | from_yaml | to_json }},
-                  "proxy_hostid": {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }},
-                  "monitored_by": {{ 1 if (_proxy_id_int | int) > 0 else 0 }},
-                  "tags": {{ _zbx_tags_json | from_yaml | to_json }}
-                }
-              }
+              jsonrpc: "2.0"
+              method: "host.update"
+              id: 3
+              auth: "{{ _auth }}"
+              params:
+                hostid: "{{ _hostid }}"
+                status: "{{ _zbx_desired_status | default(1) }}"
+                host: "{{ _nb_name }}"
+                name: "{{ _nb_visible }}"
+                groups: "{{ _zbx_groups_json | from_yaml }}"
+                templates: "{{ _zbx_templates_json | from_yaml }}"
+                proxy_hostid: "{{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
+                monitored_by: "{{ 1 if (_proxy_id_int | int) > 0 else 0 }}"
+                tags: "{{ _zbx_tags_json | from_yaml }}"
 
         - name: Debug host.update request body
           when: _hostid is defined
