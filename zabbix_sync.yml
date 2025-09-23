@@ -238,18 +238,19 @@
       set_fact:
         _proxy_id_int: "{{ (_proxy_cf_raw | default('0') | string | regex_search('\\d+') | default('0')) | int }}"
 
-    - name: Handle Zabbix server proxy ID (10084 = no proxy)
+    - name: Check if proxy is Zabbix server (10084)
       set_fact:
-        _proxy_id_int: "{{ 0 if (_proxy_id_int | int) == 10084 else _proxy_id_int }}"
+        _is_zabbix_server: "{{ (_proxy_id_int | int) == 10084 }}"
 
     - name: Debug normalized proxy id
       debug:
         msg: 
           - "Normalized proxy ID: {{ _proxy_id_int }}"
-          - "Note: Proxy ID 10084 (Zabbix server) is converted to 0 (no proxy)"
+          - "Is Zabbix server (10084): {{ _is_zabbix_server }}"
+          - "Note: Proxy ID 10084 (Zabbix server) will skip proxy parameters"
 
     - name: Validate proxy id in Zabbix (when provided)
-      when: (_proxy_id_int | int) > 0
+      when: (_proxy_id_int | int) > 0 and not _is_zabbix_server
       uri:
         url: "{{ zbx_api }}"
         method: POST
@@ -267,14 +268,14 @@
       register: _proxy_chk
 
     - name: Debug proxy validation result
-      when: (_proxy_id_int | int) > 0
+      when: (_proxy_id_int | int) > 0 and not _is_zabbix_server
       debug:
         msg:
           - "Proxy validation result: {{ _proxy_chk.json.result | default('No result') }}"
           - "Proxy validation status code: {{ _proxy_chk.status | default('No status') }}"
 
     - name: Assert proxy exists or visible to the token
-      when: (_proxy_id_int | int) > 0
+      when: (_proxy_id_int | int) > 0 and not _is_zabbix_server
       assert:
         that: [ (_proxy_chk.json.result | length | int) == 1 ]
         fail_msg: "Zabbix proxy id {{ _proxy_id_int }} not found or token lacks permission."
@@ -336,23 +337,15 @@
             _zbx_desired_status: "{{ 0 if _nb_status_norm == 'active' else 1 }}"
 
         # Create or update host (replace groups & templates). No Jinja blocks inside mappings!
-        - name: Set proxy_hostid for API calls
-          set_fact:
-            _proxy_hostid_api: "{{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
-
-        - name: Debug proxy_hostid_int variable
+        - name: Debug proxy configuration summary
           debug:
             msg:
-              - "proxy_hostid_int value: {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
-              - "proxy_hostid_int type: {{ ((_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0) | type_debug }}"
+              - "Proxy ID from NetBox: {{ _proxy_id_int }}"
+              - "Is Zabbix server (10084): {{ _is_zabbix_server }}"
+              - "Will use proxy: {{ 'Yes' if ((_proxy_id_int | int) > 0 and not _is_zabbix_server) else 'No (direct Zabbix server monitoring)' }}"
 
-        - name: Debug proxy_hostid being sent to Zabbix (create)
-          debug:
-            msg: 
-              - "Proxy hostid being sent to Zabbix (create): {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }} (type: {{ ((_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0) | type_debug }})"
-
-        - name: Build host.create request body
-          when: _hostid is not defined
+        - name: Build host.create request body (with proxy)
+          when: _hostid is not defined and (_proxy_id_int | int) > 0 and not _is_zabbix_server
           set_fact:
             _host_create_body:
               jsonrpc: "2.0"
@@ -364,8 +357,36 @@
                 name: "{{ _nb_visible }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
-                proxyid: "{{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
-                monitored_by: "{{ 1 if (_proxy_id_int | int) > 0 else 0 }}"
+                proxyid: "{{ _proxy_id_int | int }}"
+                monitored_by: 1
+                tags: "{{ _zbx_tags_json | from_yaml }}"
+                status: "{{ _zbx_desired_status | default(1) }}"
+                tls_connect: "{{ _iface_details.tls_connect | default(1) }}"
+                tls_accept: "{{ _iface_details.tls_accept | default(1) }}"
+                tls_psk_identity: "{{ _iface_details.tls_psk_identity | default('') }}"
+                tls_psk: "{{ _iface_details.tls_psk | default('') }}"
+                interfaces:
+                  - type: "{{ _iface_type | int }}"
+                    main: 1
+                    useip: 1
+                    ip: "{{ _iface_ip }}"
+                    dns: ""
+                    port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
+                    details: "{{ _iface_details | default(omit) }}"
+
+        - name: Build host.create request body (no proxy)
+          when: _hostid is not defined and ((_proxy_id_int | int) == 0 or _is_zabbix_server)
+          set_fact:
+            _host_create_body:
+              jsonrpc: "2.0"
+              method: "host.create"
+              id: 2
+              auth: "{{ _auth }}"
+              params:
+                host: "{{ _nb_name }}"
+                name: "{{ _nb_visible }}"
+                groups: "{{ _zbx_groups_json | from_yaml }}"
+                templates: "{{ _zbx_templates_json | from_yaml }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
                 status: "{{ _zbx_desired_status | default(1) }}"
                 tls_connect: "{{ _iface_details.tls_connect | default(1) }}"
@@ -385,9 +406,10 @@
           when: _hostid is not defined
           debug:
             msg:
-              - "proxyid value: {{ _host_create_body.params.proxyid }}"
-              - "proxyid type: {{ _host_create_body.params.proxyid | type_debug }}"
-              - "Expected integer value: {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
+              - "proxyid value: {{ _host_create_body.params.proxyid | default('NOT SET (no proxy)') }}"
+              - "proxyid type: {{ _host_create_body.params.proxyid | type_debug | default('NOT SET') }}"
+              - "Is Zabbix server (10084): {{ _is_zabbix_server }}"
+              - "Expected behavior: {{ 'Proxy parameters included' if ((_proxy_id_int | int) > 0 and not _is_zabbix_server) else 'No proxy parameters' }}"
 
         - name: Debug host-level PSK settings (create)
           when: _hostid is not defined
@@ -431,13 +453,9 @@
           set_fact:
             _hostid: "{{ _host_create.json.result.hostids[0] }}"
 
-        - name: Debug proxy_hostid being sent to Zabbix (update)
-          debug:
-            msg:
-              - "Proxy hostid being sent to Zabbix (update): {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }} (type: {{ ((_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0) | type_debug }})"
 
-        - name: Build host.update request body
-          when: _hostid is defined
+        - name: Build host.update request body (with proxy)
+          when: _hostid is defined and (_proxy_id_int | int) > 0 and not _is_zabbix_server
           set_fact:
             _host_update_body:
               jsonrpc: "2.0"
@@ -451,8 +469,29 @@
                 name: "{{ _nb_visible }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
-                proxyid: "{{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
-                monitored_by: "{{ 1 if (_proxy_id_int | int) > 0 else 0 }}"
+                proxyid: "{{ _proxy_id_int | int }}"
+                monitored_by: 1
+                tags: "{{ _zbx_tags_json | from_yaml }}"
+                tls_connect: "{{ _iface_details.tls_connect | default(1) }}"
+                tls_accept: "{{ _iface_details.tls_accept | default(1) }}"
+                tls_psk_identity: "{{ _iface_details.tls_psk_identity | default('') }}"
+                tls_psk: "{{ _iface_details.tls_psk | default('') }}"
+
+        - name: Build host.update request body (no proxy)
+          when: _hostid is defined and ((_proxy_id_int | int) == 0 or _is_zabbix_server)
+          set_fact:
+            _host_update_body:
+              jsonrpc: "2.0"
+              method: "host.update"
+              id: 3
+              auth: "{{ _auth }}"
+              params:
+                hostid: "{{ _hostid }}"
+                status: "{{ _zbx_desired_status | default(1) }}"
+                host: "{{ _nb_name }}"
+                name: "{{ _nb_visible }}"
+                groups: "{{ _zbx_groups_json | from_yaml }}"
+                templates: "{{ _zbx_templates_json | from_yaml }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
                 tls_connect: "{{ _iface_details.tls_connect | default(1) }}"
                 tls_accept: "{{ _iface_details.tls_accept | default(1) }}"
@@ -468,9 +507,10 @@
           when: _hostid is defined
           debug:
             msg:
-              - "proxyid value: {{ _host_update_body.params.proxyid }}"
-              - "proxyid type: {{ _host_update_body.params.proxyid | type_debug }}"
-              - "Expected integer value: {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
+              - "proxyid value: {{ _host_update_body.params.proxyid | default('NOT SET (no proxy)') }}"
+              - "proxyid type: {{ _host_update_body.params.proxyid | type_debug | default('NOT SET') }}"
+              - "Is Zabbix server (10084): {{ _is_zabbix_server }}"
+              - "Expected behavior: {{ 'Proxy parameters included' if ((_proxy_id_int | int) > 0 and not _is_zabbix_server) else 'No proxy parameters' }}"
 
         - name: Debug host-level PSK settings (update)
           when: _hostid is defined
@@ -530,7 +570,7 @@
           register: _hostget2
 
         - name: Verify proxy assignment with explicit host.get
-          when: _hostid is defined and (_proxy_id_int | int) > 0
+          when: _hostid is defined and (_proxy_id_int | int) > 0 and not _is_zabbix_server
           uri:
             url: "{{ zbx_api }}"
             method: POST
@@ -548,7 +588,7 @@
           register: _host_proxy_check
 
         - name: Debug explicit proxy check
-          when: (_proxy_id_int | int) > 0
+          when: (_proxy_id_int | int) > 0 and not _is_zabbix_server
           debug:
             msg:
               - "Explicit proxy check result: {{ _host_proxy_check.json.result[0] | default('No result') }}"
