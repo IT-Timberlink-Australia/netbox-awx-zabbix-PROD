@@ -326,11 +326,13 @@
         # Create or update host (replace groups & templates). No Jinja blocks inside mappings!
         - name: Set proxy_hostid for API calls
           set_fact:
-            _proxy_hostid_api: "{{ _proxy_id_int if (_proxy_id_int | int) > 0 else 0 }}"
+            _proxy_hostid_api: "{{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
 
         - name: Debug proxy_hostid being sent to Zabbix (create)
           debug:
-            msg: "Proxy hostid being sent to Zabbix (create): {{ _proxy_hostid_api }} (type: {{ _proxy_hostid_api | type_debug }})"
+            msg: 
+              - "Proxy hostid being sent to Zabbix (create): {{ _proxy_hostid_api }} (type: {{ _proxy_hostid_api | type_debug }})"
+              - "After int filter: {{ _proxy_hostid_api | int }} (type: {{ (_proxy_hostid_api | int) | type_debug }})"
 
         - name: Build host.create request body
           when: _hostid is not defined
@@ -345,7 +347,7 @@
                 name: "{{ _nb_visible }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
-                proxy_hostid: "{{ _proxy_hostid_api }}"
+                proxy_hostid: "{{ _proxy_hostid_api | int }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
                 status: "{{ _zbx_desired_status | default(1) }}"
                 interfaces:
@@ -388,7 +390,9 @@
 
         - name: Debug proxy_hostid being sent to Zabbix (update)
           debug:
-            msg: "Proxy hostid being sent to Zabbix (update): {{ _proxy_hostid_api }} (type: {{ _proxy_hostid_api | type_debug }})"
+            msg:
+              - "Proxy hostid being sent to Zabbix (update): {{ _proxy_hostid_api }} (type: {{ _proxy_hostid_api | type_debug }})"
+              - "After int filter: {{ _proxy_hostid_api | int }} (type: {{ (_proxy_hostid_api | int) | type_debug }})"
 
         - name: Build host.update request body
           when: _hostid is defined
@@ -405,7 +409,7 @@
                 name: "{{ _nb_visible }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
-                proxy_hostid: "{{ _proxy_hostid_api }}"
+                proxy_hostid: "{{ _proxy_hostid_api | int }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
 
         - name: Debug host.update request body
