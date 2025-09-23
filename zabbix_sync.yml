@@ -352,7 +352,7 @@
                 name: "{{ _nb_visible }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
-                proxy_hostid: "{{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
+                proxyid: "{{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
                 monitored_by: "{{ 1 if (_proxy_id_int | int) > 0 else 0 }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
                 status: "{{ _zbx_desired_status | default(1) }}"
@@ -369,8 +369,8 @@
           when: _hostid is not defined
           debug:
             msg:
-              - "proxy_hostid value: {{ _host_create_body.params.proxy_hostid }}"
-              - "proxy_hostid type: {{ _host_create_body.params.proxy_hostid | type_debug }}"
+              - "proxyid value: {{ _host_create_body.params.proxyid }}"
+              - "proxyid type: {{ _host_create_body.params.proxyid | type_debug }}"
               - "Expected integer value: {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
 
         - name: ZBX host.create (if absent)
@@ -425,7 +425,7 @@
                 name: "{{ _nb_visible }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
-                proxy_hostid: "{{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
+                proxyid: "{{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
                 monitored_by: "{{ 1 if (_proxy_id_int | int) > 0 else 0 }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
 
@@ -438,8 +438,8 @@
           when: _hostid is defined
           debug:
             msg:
-              - "proxy_hostid value: {{ _host_update_body.params.proxy_hostid }}"
-              - "proxy_hostid type: {{ _host_update_body.params.proxy_hostid | type_debug }}"
+              - "proxyid value: {{ _host_update_body.params.proxyid }}"
+              - "proxyid type: {{ _host_update_body.params.proxyid | type_debug }}"
               - "Expected integer value: {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
 
         - name: ZBX host.update (if present)
