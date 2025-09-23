@@ -347,7 +347,7 @@
                 name: "{{ _nb_visible }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
-                proxy_hostid: "{{ _proxy_hostid_api | int }}"
+                proxy_hostid: {{ _proxy_hostid_api | int }}
                 tags: "{{ _zbx_tags_json | from_yaml }}"
                 status: "{{ _zbx_desired_status | default(1) }}"
                 interfaces:
@@ -363,6 +363,13 @@
           when: _hostid is not defined
           debug:
             msg: "Host create request body: {{ _host_create_body | to_nice_json }}"
+
+        - name: Debug proxy_hostid in request body
+          when: _hostid is not defined
+          debug:
+            msg:
+              - "proxy_hostid value: {{ _host_create_body.params.proxy_hostid }}"
+              - "proxy_hostid type: {{ _host_create_body.params.proxy_hostid | type_debug }}"
 
         - name: ZBX host.create (if absent)
           when: _hostid is not defined
@@ -409,13 +416,20 @@
                 name: "{{ _nb_visible }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
-                proxy_hostid: "{{ _proxy_hostid_api | int }}"
+                proxy_hostid: {{ _proxy_hostid_api | int }}
                 tags: "{{ _zbx_tags_json | from_yaml }}"
 
         - name: Debug host.update request body
           when: _hostid is defined
           debug:
             msg: "Host update request body: {{ _host_update_body | to_nice_json }}"
+
+        - name: Debug proxy_hostid in update request body
+          when: _hostid is defined
+          debug:
+            msg:
+              - "proxy_hostid value: {{ _host_update_body.params.proxy_hostid }}"
+              - "proxy_hostid type: {{ _host_update_body.params.proxy_hostid | type_debug }}"
 
         - name: ZBX host.update (if present)
           when: _hostid is defined
@@ -456,6 +470,31 @@
                 selectInterfaces: [ "interfaceid", "type", "ip", "main" ]
                 hostids: [ "{{ _hostid }}" ]
           register: _hostget2
+
+        - name: Verify proxy assignment with explicit host.get
+          when: (_proxy_id_int | int) > 0
+          uri:
+            url: "{{ zbx_api }}"
+            method: POST
+            headers: { Content-Type: "application/json-rpc" }
+            body_format: json
+            validate_certs: "{{ zbx_verify }}"
+            body:
+              jsonrpc: "2.0"
+              method: "host.get"
+              id: 6
+              auth: "{{ _auth }}"
+              params:
+                output: [ "hostid", "proxy_hostid" ]
+                hostids: [ "{{ _hostid }}" ]
+          register: _host_proxy_check
+
+        - name: Debug explicit proxy check
+          when: (_proxy_id_int | int) > 0
+          debug:
+            msg:
+              - "Explicit proxy check result: {{ _host_proxy_check.json.result[0] | default('No result') }}"
+              - "Proxy_hostid from explicit check: {{ _host_proxy_check.json.result[0].proxy_hostid | default('No proxy assigned') }}"
 
         - name: Debug current proxy assignment in Zabbix
           debug:
