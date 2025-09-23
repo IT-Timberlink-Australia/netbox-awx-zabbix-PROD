@@ -362,6 +362,10 @@
                 monitored_by: "{{ 1 if (_proxy_id_int | int) > 0 else 0 }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
                 status: "{{ _zbx_desired_status | default(1) }}"
+                tls_connect: "{{ _iface_details.tls_connect | default(1) }}"
+                tls_accept: "{{ _iface_details.tls_accept | default(1) }}"
+                tls_psk_identity: "{{ _iface_details.tls_psk_identity | default('') }}"
+                tls_psk: "{{ _iface_details.tls_psk | default('') }}"
                 interfaces:
                   - type: "{{ _iface_type | int }}"
                     main: 1
@@ -378,6 +382,15 @@
               - "proxyid value: {{ _host_create_body.params.proxyid }}"
               - "proxyid type: {{ _host_create_body.params.proxyid | type_debug }}"
               - "Expected integer value: {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
+
+        - name: Debug host-level PSK settings (create)
+          when: _hostid is not defined
+          debug:
+            msg:
+              - "Host-level TLS Connect: {{ _host_create_body.params.tls_connect }}"
+              - "Host-level TLS Accept: {{ _host_create_body.params.tls_accept }}"
+              - "Host-level PSK Identity: {{ _host_create_body.params.tls_psk_identity }}"
+              - "Host-level PSK Key: {{ _host_create_body.params.tls_psk | length }} characters"
 
         - name: ZBX host.create (if absent)
           when: _hostid is not defined
@@ -435,6 +448,10 @@
                 proxyid: "{{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
                 monitored_by: "{{ 1 if (_proxy_id_int | int) > 0 else 0 }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
+                tls_connect: "{{ _iface_details.tls_connect | default(1) }}"
+                tls_accept: "{{ _iface_details.tls_accept | default(1) }}"
+                tls_psk_identity: "{{ _iface_details.tls_psk_identity | default('') }}"
+                tls_psk: "{{ _iface_details.tls_psk | default('') }}"
 
         - name: Debug host.update request body
           when: _hostid is defined
@@ -448,6 +465,15 @@
               - "proxyid value: {{ _host_update_body.params.proxyid }}"
               - "proxyid type: {{ _host_update_body.params.proxyid | type_debug }}"
               - "Expected integer value: {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
+
+        - name: Debug host-level PSK settings (update)
+          when: _hostid is defined
+          debug:
+            msg:
+              - "Host-level TLS Connect: {{ _host_update_body.params.tls_connect }}"
+              - "Host-level TLS Accept: {{ _host_update_body.params.tls_accept }}"
+              - "Host-level PSK Identity: {{ _host_update_body.params.tls_psk_identity }}"
+              - "Host-level PSK Key: {{ _host_update_body.params.tls_psk | length }} characters"
 
         - name: ZBX host.update (if present)
           when: _hostid is defined
