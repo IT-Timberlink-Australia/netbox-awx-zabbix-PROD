@@ -290,7 +290,7 @@
               [{% for tid in _tmpl_ids_int %}{"templateid":"{{ tid }}"}{% if not loop.last %},{% endif %}{% endfor %}]
             _zbx_tags_json: >-
               [
-                {"tag":"cmdb","value":"true"}
+                {"tag":"cmdb","value":"synced"}
                 {% if _tag_env|default('') %}, {"tag":"environment","value":"{{ _tag_env }}"}{% endif %}
                 {% if _tag_os|default('') %}, {"tag":"os","value":"{{ _tag_os }}"}{% endif %}
                 {% if _tag_site|default('') %}, {"tag":"site","value":"{{ _tag_site }}"}{% endif %}
