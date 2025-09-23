@@ -230,7 +230,7 @@
 
     - name: Normalize proxy id (robust)
       set_fact:
-        _proxy_id_int: "{{ ((_proxy_cf_raw | string) | regex_search('\\d+') | default('0')) | int }}"
+        _proxy_id_int: "{{ (_proxy_cf_raw | default('0') | string | regex_search('\\d+') | default('0')) | int }}"
 
     - name: Debug normalized proxy id
       debug:
@@ -253,6 +253,13 @@
             output: [ "proxyid", "name" ]
             proxyids: [ "{{ _proxy_id_int }}" ]
       register: _proxy_chk
+
+    - name: Debug proxy validation result
+      when: (_proxy_id_int | int) > 0
+      debug:
+        msg:
+          - "Proxy validation result: {{ _proxy_chk.json.result | default('No result') }}"
+          - "Proxy validation status code: {{ _proxy_chk.status | default('No status') }}"
 
     - name: Assert proxy exists or visible to the token
       when: (_proxy_id_int | int) > 0
@@ -352,6 +359,14 @@
                     details: "{{ _iface_details | default(omit) }}"
           register: _host_create
 
+        - name: Debug host.create response
+          when: _hostid is not defined
+          debug:
+            msg:
+              - "Host create response: {{ _host_create.json | default('No JSON response') }}"
+              - "Host create status: {{ _host_create.status | default('No status') }}"
+              - "Host create msg: {{ _host_create.msg | default('No message') }}"
+
         - name: Cache hostid from create
           when: _hostid is not defined
           set_fact:
@@ -383,6 +398,15 @@
                 templates: "{{ _zbx_templates_json | from_yaml }}"
                 proxy_hostid: "{{ _proxy_id_int if (_proxy_id_int | int) > 0 else 0 }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
+          register: _host_update
+
+        - name: Debug host.update response
+          when: _hostid is defined
+          debug:
+            msg:
+              - "Host update response: {{ _host_update.json | default('No JSON response') }}"
+              - "Host update status: {{ _host_update.status | default('No status') }}"
+              - "Host update msg: {{ _host_update.msg | default('No message') }}"
 
         # Ensure only one primary interface with correct type/IP
         - name: Fetch interfaces
@@ -399,11 +423,17 @@
               id: 5
               auth: "{{ _auth }}"
               params:
-                output: [ "hostid" ]
+                output: [ "hostid", "proxy_hostid" ]
                 selectTags: [ "tag", "value" ]
                 selectInterfaces: [ "interfaceid", "type", "ip", "main" ]
                 hostids: [ "{{ _hostid }}" ]
           register: _hostget2
+
+        - name: Debug current proxy assignment in Zabbix
+          debug:
+            msg:
+              - "Current proxy_hostid in Zabbix: {{ _hostget2.json.result[0].proxy_hostid | default('No proxy assigned') }}"
+              - "Expected proxy_hostid: {{ _proxy_id_int if (_proxy_id_int | int) > 0 else 'No proxy expected' }}"
 
         - name: Current host facts
           set_fact:
