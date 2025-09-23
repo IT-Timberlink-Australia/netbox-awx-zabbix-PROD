@@ -324,19 +324,18 @@
             _zbx_desired_status: "{{ 0 if _nb_status_norm == 'active' else 1 }}"
 
         # Create or update host (replace groups & templates). No Jinja blocks inside mappings!
+        - name: Set proxy_hostid for API calls
+          set_fact:
+            _proxy_hostid_api: "{{ _proxy_id_int if (_proxy_id_int | int) > 0 else 0 }}"
+
         - name: Debug proxy_hostid being sent to Zabbix (create)
           debug:
-            msg: "Proxy hostid being sent to Zabbix (create): {{ _proxy_id_int if (_proxy_id_int | int) > 0 else 0 }}"
+            msg: "Proxy hostid being sent to Zabbix (create): {{ _proxy_hostid_api }} (type: {{ _proxy_hostid_api | type_debug }})"
 
-        - name: ZBX host.create (if absent)
+        - name: Build host.create request body
           when: _hostid is not defined
-          uri:
-            url: "{{ zbx_api }}"
-            method: POST
-            headers: { Content-Type: "application/json-rpc" }
-            body_format: json
-            validate_certs: "{{ zbx_verify }}"
-            body:
+          set_fact:
+            _host_create_body:
               jsonrpc: "2.0"
               method: "host.create"
               id: 2
@@ -346,7 +345,7 @@
                 name: "{{ _nb_visible }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
-                proxy_hostid: "{{ _proxy_id_int if (_proxy_id_int | int) > 0 else 0 }}"
+                proxy_hostid: "{{ _proxy_hostid_api }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
                 status: "{{ _zbx_desired_status | default(1) }}"
                 interfaces:
@@ -357,6 +356,21 @@
                     dns: ""
                     port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
                     details: "{{ _iface_details | default(omit) }}"
+
+        - name: Debug host.create request body
+          when: _hostid is not defined
+          debug:
+            msg: "Host create request body: {{ _host_create_body | to_nice_json }}"
+
+        - name: ZBX host.create (if absent)
+          when: _hostid is not defined
+          uri:
+            url: "{{ zbx_api }}"
+            method: POST
+            headers: { Content-Type: "application/json-rpc" }
+            body_format: json
+            validate_certs: "{{ zbx_verify }}"
+            body: "{{ _host_create_body }}"
           register: _host_create
 
         - name: Debug host.create response
@@ -374,17 +388,12 @@
 
         - name: Debug proxy_hostid being sent to Zabbix (update)
           debug:
-            msg: "Proxy hostid being sent to Zabbix (update): {{ _proxy_id_int if (_proxy_id_int | int) > 0 else 0 }}"
+            msg: "Proxy hostid being sent to Zabbix (update): {{ _proxy_hostid_api }} (type: {{ _proxy_hostid_api | type_debug }})"
 
-        - name: ZBX host.update (if present)
+        - name: Build host.update request body
           when: _hostid is defined
-          uri:
-            url: "{{ zbx_api }}"
-            method: POST
-            headers: { Content-Type: "application/json-rpc" }
-            body_format: json
-            validate_certs: "{{ zbx_verify }}"
-            body:
+          set_fact:
+            _host_update_body:
               jsonrpc: "2.0"
               method: "host.update"
               id: 3
@@ -396,8 +405,23 @@
                 name: "{{ _nb_visible }}"
                 groups: "{{ _zbx_groups_json | from_yaml }}"
                 templates: "{{ _zbx_templates_json | from_yaml }}"
-                proxy_hostid: "{{ _proxy_id_int if (_proxy_id_int | int) > 0 else 0 }}"
+                proxy_hostid: "{{ _proxy_hostid_api }}"
                 tags: "{{ _zbx_tags_json | from_yaml }}"
+
+        - name: Debug host.update request body
+          when: _hostid is defined
+          debug:
+            msg: "Host update request body: {{ _host_update_body | to_nice_json }}"
+
+        - name: ZBX host.update (if present)
+          when: _hostid is defined
+          uri:
+            url: "{{ zbx_api }}"
+            method: POST
+            headers: { Content-Type: "application/json-rpc" }
+            body_format: json
+            validate_certs: "{{ zbx_verify }}"
+            body: "{{ _host_update_body }}"
           register: _host_update
 
         - name: Debug host.update response
@@ -434,6 +458,7 @@
             msg:
               - "Current proxy_hostid in Zabbix: {{ _hostget2.json.result[0].proxy_hostid | default('No proxy assigned') }}"
               - "Expected proxy_hostid: {{ _proxy_id_int if (_proxy_id_int | int) > 0 else 'No proxy expected' }}"
+              - "Full host.get response: {{ _hostget2.json.result[0] | to_nice_json }}"
 
         - name: Current host facts
           set_fact:
