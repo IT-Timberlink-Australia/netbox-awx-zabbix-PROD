@@ -4,13 +4,13 @@
 This guide explains how to set up an AWX workflow that:
 1. Updates the NetBox inventory source
 2. Checks if the "Stage - Add Zabbix" inventory has hosts
-3. Conditionally runs the "WF - PROD - Zabbix Sync" workflow if hosts exist
+3. Conditionally runs the "PROD - Netbox to Zabbix Sync" playbook if hosts exist
 
 ## 📋 Prerequisites
 
 - AWX/Ansible Tower access with admin permissions
 - NetBox inventory source already configured
-- "WF - PROD - Zabbix Sync" workflow already exists
+- "PROD - Netbox to Zabbix Sync" playbook already exists
 - "Stage - Add Zabbix" inventory already exists
 
 ## 🔧 Step 1: Create Host Count Check Job Template
@@ -61,9 +61,9 @@ This guide explains how to set up an AWX workflow that:
 - **Success Nodes**: `Run Zabbix Sync`
 - **Failure Nodes**: None (stop on failure)
 
-#### Node 3: Run Zabbix Sync Workflow
-- **Node Type**: `Workflow Job Template`
-- **Job Template**: `WF - PROD - Zabbix Sync`
+#### Node 3: Run Zabbix Sync Playbook
+- **Node Type**: `Job Template`
+- **Job Template**: `PROD - Netbox to Zabbix Sync`
 - **Node Alias**: `Run Zabbix Sync`
 - **Run Condition**: `Custom`
 - **Custom Condition**: `{{ stage_add_zabbix_has_hosts }}`
@@ -94,7 +94,7 @@ This guide explains how to set up an AWX workflow that:
 ### 3.4 Common Issues
 1. **Job Template not found**: Ensure all job templates exist
 2. **Inventory not found**: Verify "Stage - Add Zabbix" inventory exists
-3. **Workflow not found**: Verify "WF - PROD - Zabbix Sync" exists
+3. **Job Template not found**: Verify "PROD - Netbox to Zabbix Sync" exists
 4. **Permission issues**: Check AWX permissions for workflow execution
 
 ## 🔄 Step 4: Schedule the Workflow (Optional)
@@ -145,8 +145,8 @@ The workflow uses these facts set by the host count check:
          │
          ▼
 ┌─────────────────────────┐
-│ 3. Run WF - PROD -      │
-│    Zabbix Sync          │
+│ 3. Run PROD - Netbox    │
+│    to Zabbix Sync       │
 └─────────────────────────┘
 ```
 

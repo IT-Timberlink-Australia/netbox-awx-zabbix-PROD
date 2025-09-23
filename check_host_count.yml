@@ -47,5 +47,5 @@
       debug:
         msg: 
           - "=== Workflow Decision ==="
-          - "Should trigger 'WF - PROD - Zabbix Sync': {{ workflow_should_run }}"
+          - "Should trigger 'PROD - Netbox to Zabbix Sync': {{ workflow_should_run }}"
           - "Reason: {{ 'Hosts found in inventory' if workflow_should_run else 'No hosts in inventory' }}"
