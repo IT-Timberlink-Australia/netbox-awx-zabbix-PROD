@@ -328,45 +328,49 @@
           set_fact:
             _proxy_hostid_api: "{{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
 
-        - name: Set proxy_hostid as integer for JSON
-          set_fact:
-            _proxy_hostid_int: "{{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
-
         - name: Debug proxy_hostid_int variable
           debug:
             msg:
-              - "proxy_hostid_int value: {{ _proxy_hostid_int }}"
-              - "proxy_hostid_int type: {{ _proxy_hostid_int | type_debug }}"
+              - "proxy_hostid_int value: {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
+              - "proxy_hostid_int type: {{ ((_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0) | type_debug }}"
 
         - name: Debug proxy_hostid being sent to Zabbix (create)
           debug:
             msg: 
-              - "Proxy hostid being sent to Zabbix (create): {{ _proxy_hostid_int }} (type: {{ _proxy_hostid_int | type_debug }})"
+              - "Proxy hostid being sent to Zabbix (create): {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }} (type: {{ ((_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0) | type_debug }})"
 
         - name: Build host.create request body
           when: _hostid is not defined
           set_fact:
-            _host_create_body:
-              jsonrpc: "2.0"
-              method: "host.create"
-              id: 2
-              auth: "{{ _auth }}"
-              params:
-                host: "{{ _nb_name }}"
-                name: "{{ _nb_visible }}"
-                groups: "{{ _zbx_groups_json | from_yaml }}"
-                templates: "{{ _zbx_templates_json | from_yaml }}"
-                proxy_hostid: "{{ _proxy_hostid_int }}"
-                tags: "{{ _zbx_tags_json | from_yaml }}"
-                status: "{{ _zbx_desired_status | default(1) }}"
-                interfaces:
-                  - type: "{{ _iface_type | int }}"
-                    main: 1
-                    useip: 1
-                    ip: "{{ _iface_ip }}"
-                    dns: ""
-                    port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
-                    details: "{{ _iface_details | default(omit) }}"
+            _host_create_body: "{{ _host_create_body | from_json }}"
+          vars:
+            _host_create_body: |
+              {
+                "jsonrpc": "2.0",
+                "method": "host.create",
+                "id": 2,
+                "auth": "{{ _auth }}",
+                "params": {
+                  "host": "{{ _nb_name }}",
+                  "name": "{{ _nb_visible }}",
+                  "groups": {{ _zbx_groups_json | from_yaml | to_json }},
+                  "templates": {{ _zbx_templates_json | from_yaml | to_json }},
+                  "proxy_hostid": {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }},
+                  "tags": {{ _zbx_tags_json | from_yaml | to_json }},
+                  "status": {{ _zbx_desired_status | default(1) }},
+                  "interfaces": [
+                    {
+                      "type": {{ _iface_type | int }},
+                      "main": 1,
+                      "useip": 1,
+                      "ip": "{{ _iface_ip }}",
+                      "dns": "",
+                      "port": "{{ _iface_default_ports[_iface_type] | default('10050') }}",
+                      "details": {{ _iface_details | default({}) | to_json }}
+                    }
+                  ]
+                }
+              }
 
         - name: Debug host.create request body
           when: _hostid is not defined
@@ -379,6 +383,7 @@
             msg:
               - "proxy_hostid value: {{ _host_create_body.params.proxy_hostid }}"
               - "proxy_hostid type: {{ _host_create_body.params.proxy_hostid | type_debug }}"
+              - "Expected integer value: {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
 
         - name: ZBX host.create (if absent)
           when: _hostid is not defined
@@ -407,25 +412,30 @@
         - name: Debug proxy_hostid being sent to Zabbix (update)
           debug:
             msg:
-              - "Proxy hostid being sent to Zabbix (update): {{ _proxy_hostid_int }} (type: {{ _proxy_hostid_int | type_debug }})"
+              - "Proxy hostid being sent to Zabbix (update): {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }} (type: {{ ((_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0) | type_debug }})"
 
         - name: Build host.update request body
           when: _hostid is defined
           set_fact:
-            _host_update_body:
-              jsonrpc: "2.0"
-              method: "host.update"
-              id: 3
-              auth: "{{ _auth }}"
-              params:
-                hostid: "{{ _hostid }}"
-                status: "{{ _zbx_desired_status | default(1) }}"
-                host: "{{ _nb_name }}"
-                name: "{{ _nb_visible }}"
-                groups: "{{ _zbx_groups_json | from_yaml }}"
-                templates: "{{ _zbx_templates_json | from_yaml }}"
-                proxy_hostid: "{{ _proxy_hostid_int }}"
-                tags: "{{ _zbx_tags_json | from_yaml }}"
+            _host_update_body: "{{ _host_update_body | from_json }}"
+          vars:
+            _host_update_body: |
+              {
+                "jsonrpc": "2.0",
+                "method": "host.update",
+                "id": 3,
+                "auth": "{{ _auth }}",
+                "params": {
+                  "hostid": "{{ _hostid }}",
+                  "status": {{ _zbx_desired_status | default(1) }},
+                  "host": "{{ _nb_name }}",
+                  "name": "{{ _nb_visible }}",
+                  "groups": {{ _zbx_groups_json | from_yaml | to_json }},
+                  "templates": {{ _zbx_templates_json | from_yaml | to_json }},
+                  "proxy_hostid": {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }},
+                  "tags": {{ _zbx_tags_json | from_yaml | to_json }}
+                }
+              }
 
         - name: Debug host.update request body
           when: _hostid is defined
@@ -438,6 +448,7 @@
             msg:
               - "proxy_hostid value: {{ _host_update_body.params.proxy_hostid }}"
               - "proxy_hostid type: {{ _host_update_body.params.proxy_hostid | type_debug }}"
+              - "Expected integer value: {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }}"
 
         - name: ZBX host.update (if present)
           when: _hostid is defined
