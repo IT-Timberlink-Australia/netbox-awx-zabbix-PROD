@@ -516,6 +516,7 @@
               - "Proxy_hostid from explicit check: {{ _host_proxy_check.json.result[0].proxy_hostid | default('No proxy assigned') }}"
 
         - name: Debug current proxy assignment in Zabbix
+          when: _hostid is defined and _hostget2 is defined
           debug:
             msg:
               - "Current proxy_hostid in Zabbix: {{ _hostget2.json.result[0].proxy_hostid | default('No proxy assigned') }}"
