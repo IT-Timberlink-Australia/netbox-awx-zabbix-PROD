@@ -463,6 +463,7 @@
 
         # Ensure only one primary interface with correct type/IP
         - name: Fetch interfaces
+          when: _hostid is defined
           uri:
             url: "{{ zbx_api }}"
             method: POST
@@ -483,7 +484,7 @@
           register: _hostget2
 
         - name: Verify proxy assignment with explicit host.get
-          when: (_proxy_id_int | int) > 0
+          when: _hostid is defined and (_proxy_id_int | int) > 0
           uri:
             url: "{{ zbx_api }}"
             method: POST
@@ -515,11 +516,13 @@
               - "Full host.get response: {{ _hostget2.json.result[0] | to_nice_json }}"
 
         - name: Current host facts
+          when: _hostid is defined
           set_fact:
             _cur_tags: "{{ _hostget2.json.result[0].tags | default([]) }}"
             _cur_ifaces: "{{ _hostget2.json.result[0].interfaces | default([]) }}"
 
         - name: Ensure primary interface matches desired
+          when: _hostid is defined
           vars:
             _match: "{{ _cur_ifaces | selectattr('main','equalto','1') | selectattr('type','equalto', (_iface_type | int)) | selectattr('ip','equalto', _iface_ip) | list }}"
           block:
