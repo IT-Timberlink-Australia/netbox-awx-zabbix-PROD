@@ -1,0 +1,17 @@
+              {
+                "jsonrpc": "2.0",
+                "method": "host.update",
+                "id": 3,
+                "auth": "{{ _auth }}",
+                "params": {
+                  "hostid": "{{ _hostid }}",
+                  "status": {{ _zbx_desired_status | default(1) }},
+                  "host": "{{ _nb_name }}",
+                  "name": "{{ _nb_visible }}",
+                  "groups": {{ _zbx_groups_json | from_yaml | to_json }},
+                  "templates": {{ _zbx_templates_json | from_yaml | to_json }},
+                  "proxy_hostid": {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }},
+                  "monitored_by": {{ 1 if (_proxy_id_int | int) > 0 else 0 }},
+                  "tags": {{ _zbx_tags_json | from_yaml | to_json }}
+                }
+              }

@@ -108,25 +108,6 @@
             | regex_replace('^$','/')
           }}
 
-    # ---------- Check Zabbix version ----------
-    - name: Check Zabbix version
-      uri:
-        url: "{{ zbx_api }}"
-        method: POST
-        headers: { Content-Type: "application/json-rpc" }
-        body_format: json
-        validate_certs: "{{ zbx_verify }}"
-        body:
-          jsonrpc: "2.0"
-          method: "apiinfo.version"
-          id: 99
-      register: zbx_version
-      delegate_to: localhost
-
-    - name: Debug Zabbix version
-      debug:
-        msg: "Zabbix version: {{ zbx_version.json.result }}"
-
     # # one-off sanity
     # - debug:
     #     msg: { zbx_api: "{{ zbx_api }}", zbx_hostport: "{{ zbx_hostport }}", zbx_pathroot: "{{ zbx_pathroot }}" }
@@ -375,7 +356,6 @@
                   "groups": {{ _zbx_groups_json | from_yaml | to_json }},
                   "templates": {{ _zbx_templates_json | from_yaml | to_json }},
                   "proxy_hostid": {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }},
-                  "monitored_by": {{ 1 if (_proxy_id_int | int) > 0 else 0 }},
                   "tags": {{ _zbx_tags_json | from_yaml | to_json }},
                   "status": {{ _zbx_desired_status | default(1) }},
                   "interfaces": [
@@ -433,6 +413,7 @@
           debug:
             msg:
               - "Proxy hostid being sent to Zabbix (update): {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }} (type: {{ ((_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0) | type_debug }})"
+
         - name: Build host.update request body
           when: _hostid is defined
           set_fact:
@@ -452,10 +433,8 @@
                   "groups": {{ _zbx_groups_json | from_yaml | to_json }},
                   "templates": {{ _zbx_templates_json | from_yaml | to_json }},
                   "proxy_hostid": {{ (_proxy_id_int | int) if (_proxy_id_int | int) > 0 else 0 }},
-                  "monitored_by": {{ 1 if (_proxy_id_int | int) > 0 else 0 }},
                   "tags": {{ _zbx_tags_json | from_yaml | to_json }}
                 }
-              }
               }
 
         - name: Debug host.update request body
