@@ -462,8 +462,15 @@
               - "Host update msg: {{ _host_update.msg | default('No message') }}"
 
         # Ensure only one primary interface with correct type/IP
+        - name: Debug _hostid variable before Fetch interfaces
+          debug:
+            msg:
+              - "_hostid is defined: {{ _hostid is defined }}"
+              - "_hostid value: {{ _hostid | default('UNDEFINED') }}"
+              - "_hostid type: {{ _hostid | type_debug | default('UNDEFINED') }}"
+
         - name: Fetch interfaces
-          when: _hostid is defined
+          when: _hostid is defined and _hostid != ""
           uri:
             url: "{{ zbx_api }}"
             method: POST
