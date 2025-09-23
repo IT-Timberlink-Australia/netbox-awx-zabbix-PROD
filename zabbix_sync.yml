@@ -364,6 +364,9 @@
                     dns: ""
                     port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
                     details: "{{ _iface_details | default(omit) }}"
+
+        - name: Debug proxy_hostid in request body
+          when: _hostid is not defined
           debug:
             msg:
               - "proxy_hostid value: {{ _host_create_body.params.proxy_hostid }}"
