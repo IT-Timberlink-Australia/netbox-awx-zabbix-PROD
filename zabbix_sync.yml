@@ -414,6 +414,7 @@
         - name: Build host.update request body
           when: _hostid is defined
           set_fact:
+            _host_update_body:
               jsonrpc: "2.0"
               method: "host.update"
               id: 3
