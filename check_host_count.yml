@@ -1,0 +1,51 @@
+---
+# =============================================================================
+# NetBox-Zabbix Integration - Host Count Check
+# =============================================================================
+# This playbook checks if the "Stage - Add Zabbix" inventory has hosts
+# and sets facts that can be used by AWX workflow conditions.
+#
+# Usage: Run this playbook with the "Stage - Add Zabbix" inventory
+# =============================================================================
+
+- name: Check if Stage - Add Zabbix inventory has hosts
+  hosts: localhost
+  gather_facts: no
+  vars:
+    # These will be available to the workflow
+    inventory_name: "Stage - Add Zabbix"
+    
+  tasks:
+    - name: Get host count from Stage - Add Zabbix inventory
+      set_fact:
+        host_count: "{{ groups['all'] | length }}"
+      delegate_to: localhost
+      delegate_facts: true
+
+    - name: Display host count and status
+      debug:
+        msg:
+          - "=== Host Count Check Results ==="
+          - "Inventory: {{ inventory_name }}"
+          - "Total hosts found: {{ host_count }}"
+          - "Has hosts: {{ host_count | int > 0 }}"
+          - "Workflow should run: {{ host_count | int > 0 }}"
+
+    - name: Set host count as job template fact for workflow
+      set_stats:
+        data:
+          stage_add_zabbix_host_count: "{{ host_count }}"
+          stage_add_zabbix_has_hosts: "{{ host_count | int > 0 }}"
+          inventory_name: "{{ inventory_name }}"
+        aggregate: no
+
+    - name: Set final result status
+      set_fact:
+        workflow_should_run: "{{ host_count | int > 0 }}"
+        
+    - name: Display workflow decision
+      debug:
+        msg: 
+          - "=== Workflow Decision ==="
+          - "Should trigger 'WF - PROD - Zabbix Sync': {{ workflow_should_run }}"
+          - "Reason: {{ 'Hosts found in inventory' if workflow_should_run else 'No hosts in inventory' }}"
