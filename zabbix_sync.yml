@@ -238,9 +238,15 @@
       set_fact:
         _proxy_id_int: "{{ (_proxy_cf_raw | default('0') | string | regex_search('\\d+') | default('0')) | int }}"
 
+    - name: Handle Zabbix server proxy ID (10084 = no proxy)
+      set_fact:
+        _proxy_id_int: "{{ 0 if (_proxy_id_int | int) == 10084 else _proxy_id_int }}"
+
     - name: Debug normalized proxy id
       debug:
-        msg: "Normalized proxy ID: {{ _proxy_id_int }}"
+        msg: 
+          - "Normalized proxy ID: {{ _proxy_id_int }}"
+          - "Note: Proxy ID 10084 (Zabbix server) is converted to 0 (no proxy)"
 
     - name: Validate proxy id in Zabbix (when provided)
       when: (_proxy_id_int | int) > 0
