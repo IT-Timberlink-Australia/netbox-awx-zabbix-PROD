@@ -147,15 +147,16 @@
         validate_certs: '{{ zbx_validate_certs }}'
       register: zbx_get
 
-    - name: Extract hostid if present
+    - name: Extract hostid or set empty if not found
       set_fact:
-        _zbx_hostid: '{{ (zbx_get.json.result | first).hostid | default(omit) }}'
-      when: zbx_get.json.result is defined and zbx_get.json.result | length > 0
-
-    - name: Set hostid to empty if not found
-      set_fact:
-        _zbx_hostid: ''
-      when: zbx_get.json.result is not defined or zbx_get.json.result | length == 0
+        _zbx_hostid: >-
+          {{
+            (zbx_get.json.result | first).hostid
+            if (zbx_get.json.result is defined and 
+                zbx_get.json.result | length > 0 and 
+                (zbx_get.json.result | first).hostid is defined)
+            else ''
+          }}
 
     - name: Get device status from NetBox
       set_fact:
