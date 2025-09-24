@@ -3,7 +3,9 @@
 # Zabbix Host Removal Playbook
 # =============================================================================
 # Description: Removes or disables hosts in Zabbix and updates NetBox status
-#              accordingly. Supports both soft (disable) and hard (delete) removal.
+#              accordingly. Deletes hosts with "decommissioning" status, disables
+#              all other hosts, moves them to host group ID 75, and updates tags
+#              (cmdb=archived, removes others).
 #
 # Author: Infrastructure Team
 # Version: 1.0
@@ -24,7 +26,6 @@
 # Environment Variables Optional:
 #   - ZABBIX_API_URL: Zabbix API endpoint (alternative: ZABBIX_URL, ZABBIX_HOST_URL)
 #   - NETBOX_API: NetBox API endpoint (alternative: NETBOX_URL, NETBOX_HOST_URL)
-#   - ZBX_REMOVE_MODE: Removal mode - 'disable' (default) or 'delete'
 #   - NB_REMOVE_STATUS: NetBox status to set after removal (default: 'removed')
 #
 # NetBox Custom Fields Used:
@@ -32,18 +33,17 @@
 #   - zbp_sync_hint: Sync error details (cleared on successful removal)
 #
 # Usage:
-#   # Soft removal (disable host)
+#   # Remove hosts (deletes decommissioning, disables others)
 #   ansible-playbook -i inventory zabbix_remove.yml
-#
-#   # Hard removal (delete host)
-#   ZBX_REMOVE_MODE=delete ansible-playbook -i inventory zabbix_remove.yml
 #
 #   # Custom NetBox status after removal
 #   NB_REMOVE_STATUS=decommissioned ansible-playbook -i inventory zabbix_remove.yml
 #
 # Features:
 #   - Flexible URL resolution from multiple environment variable names
-#   - Supports both disable and delete operations
+#   - Deletes hosts with "decommissioning" status
+#   - Disables other hosts and moves them to host group ID 75
+#   - Updates tags for disabled hosts (cmdb=archived, removes others)
 #   - Updates NetBox custom fields with removal status
 #   - Handles both devices and virtual machines
 #   - Provides detailed operation summaries
@@ -64,8 +64,6 @@
     # TLS verify toggles (optional envs; default true)
     zbx_validate_certs: "{{ (lookup('env','ZABBIX_VERIFY') | default('true')) | bool }}"
     nb_validate_certs:  "{{ (lookup('env','NETBOX_VERIFY')  | default('false')) | bool }}"
-    # Removal mode env; treat empty/missing as 'disable'
-    _rm_mode: "{{ (lookup('env','ZBX_REMOVE_MODE') | default('disable', true) | string | lower | trim) }}"
     # NetBox target status label/value to set after removal
     nb_target_status: "{{ lookup('env','NB_REMOVE_STATUS') | default('Removed', true) }}"
 
@@ -116,12 +114,11 @@
           NetBox base='{{ _nb_base }}' api='{{ _nb_api }}'.
           Expected ZABBIX_* to resolve to https://.../zabbix and NETBOX_* to https://... .
 
-    - name: Show resolved endpoints/mode
+    - name: Show resolved endpoints
       debug:
         msg:
           zabbix_api: '{{ _zbx_api }}'
           netbox_base_for_module: '{{ _nb_base }}'
-          remove_mode_effective: '{{ _rm_mode }}'
 
     # -------- Pick host name --------
     - name: Determine Zabbix host name to remove
@@ -154,14 +151,39 @@
       set_fact:
         _zbx_hostid: '{{ (zbx_get.json.result | first).hostid | default(omit) }}'
 
+    - name: Get device status from NetBox
+      set_fact:
+        _device_status: '{{ hostvars[inventory_hostname].status.value | default(hostvars[inventory_hostname].status) }}'
+
+    - name: Determine action based on status
+      set_fact:
+        _action: '{{ "delete" if _device_status == "decommissioning" else "disable" }}'
+
     - name: Fail if host not found (explicit)
       when: _zbx_hostid is not defined
       fail:
-        msg: 'Host "{{ _zbx_host }}" not found in Zabbix; nothing to {{ _rm_mode }}.'
+        msg: 'Host "{{ _zbx_host }}" not found in Zabbix; nothing to {{ _action }}.'
 
-    # -------- Disable or delete --------
-    - name: Disable host in Zabbix (soft removal)
-      when: _zbx_hostid is defined and _rm_mode == 'disable'
+    # -------- Delete or disable based on status --------
+    - name: Delete host in Zabbix (decommissioning status)
+      when: _zbx_hostid is defined and _action == 'delete'
+      uri:
+        url: '{{ _zbx_api }}'
+        method: POST
+        headers:
+          Content-Type: 'application/json'
+        body_format: json
+        body:
+          jsonrpc: '2.0'
+          method: 'host.delete'
+          params: ['{{ _zbx_hostid }}']
+          auth: '{{ zbx_token }}'
+          id: 2
+        validate_certs: '{{ zbx_validate_certs }}'
+      register: zbx_delete
+
+    - name: Disable host in Zabbix (other statuses)
+      when: _zbx_hostid is defined and _action == 'disable'
       uri:
         url: '{{ _zbx_api }}'
         method: POST
@@ -175,12 +197,12 @@
             hostid: '{{ _zbx_hostid }}'
             status: 1     # 0=enabled, 1=disabled
           auth: '{{ zbx_token }}'
-          id: 2
+          id: 3
         validate_certs: '{{ zbx_validate_certs }}'
       register: zbx_disable
 
-    - name: Delete host in Zabbix (hard removal)
-      when: _zbx_hostid is defined and _rm_mode == 'delete'
+    - name: Change host group to ID 75 (other statuses)
+      when: _zbx_hostid is defined and _action == 'disable'
       uri:
         url: '{{ _zbx_api }}'
         method: POST
@@ -189,15 +211,39 @@
         body_format: json
         body:
           jsonrpc: '2.0'
-          method: 'host.delete'
-          params: ['{{ _zbx_hostid }}']
+          method: 'host.update'
+          params:
+            hostid: '{{ _zbx_hostid }}'
+            groups:
+              - groupid: '75'
           auth: '{{ zbx_token }}'
-          id: 3
+          id: 4
         validate_certs: '{{ zbx_validate_certs }}'
-      register: zbx_delete
+      register: zbx_group_change
+
+    - name: Update tags - set cmdb to archived and remove others (other statuses)
+      when: _zbx_hostid is defined and _action == 'disable'
+      uri:
+        url: '{{ _zbx_api }}'
+        method: POST
+        headers:
+          Content-Type: 'application/json'
+        body_format: json
+        body:
+          jsonrpc: '2.0'
+          method: 'host.update'
+          params:
+            hostid: '{{ _zbx_hostid }}'
+            tags:
+              - tag: 'cmdb'
+                value: 'archived'
+          auth: '{{ zbx_token }}'
+          id: 6
+        validate_certs: '{{ zbx_validate_certs }}'
+      register: zbx_tag_change
 
     - name: Re-read host to confirm Zabbix status (only when disabled)
-      when: _rm_mode == 'disable'
+      when: _action == 'disable'
       uri:
         url: '{{ _zbx_api }}'
         method: POST
@@ -210,17 +256,23 @@
             output: ['hostid','name','status']
             filter: { host: ['{{ _zbx_host }}'] }
           auth: '{{ zbx_token }}'
-          id: 4
+          id: 5
         validate_certs: '{{ zbx_validate_certs }}'
       register: zbx_verify
 
     - name: Show Zabbix status after action
       debug:
         msg: >-
-          {%- if _rm_mode == 'delete' -%}
+          {%- if _action == 'delete' -%}
           requested=delete; API reply={{ zbx_delete.json.result | default({}) }}
           {%- else -%}
           requested=disable; status={{ (zbx_verify.json.result | first).status | default('unknown') }}
+          {%- if zbx_group_change is defined -%}
+          ; host group changed to ID 75
+          {%- endif -%}
+          {%- if zbx_tag_change is defined -%}
+          ; tags updated (cmdb=archived, others removed)
+          {%- endif -%}
           {%- endif -%}
 
     # -------- NetBox write-back: set zbp_status + clear hint --------
@@ -262,8 +314,13 @@
       debug:
         msg:
           host: '{{ _zbx_host }}'
-          mode: '{{ _rm_mode }}'
+          device_status: '{{ _device_status }}'
+          action_taken: '{{ _action }}'
           nb_status_set: '{{ nb_target_status }}'
           zbx_status_after: >-
             {{ (zbx_verify.json.result | first).status
-               if (_rm_mode == 'disable') else 'n/a (deleted)' }}
+               if (_action == 'disable') else 'n/a (deleted)' }}
+          host_group_changed: >-
+            {{ 'Yes (to ID 75)' if (zbx_group_change is defined and _action == 'disable') else 'No' }}
+          tags_updated: >-
+            {{ 'Yes (cmdb=archived, others removed)' if (zbx_tag_change is defined and _action == 'disable') else 'No' }}
