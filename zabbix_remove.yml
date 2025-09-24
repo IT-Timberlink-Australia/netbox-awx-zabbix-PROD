@@ -150,6 +150,12 @@
     - name: Extract hostid if present
       set_fact:
         _zbx_hostid: '{{ (zbx_get.json.result | first).hostid | default(omit) }}'
+      when: zbx_get.json.result is defined and zbx_get.json.result | length > 0
+
+    - name: Set hostid to empty if not found
+      set_fact:
+        _zbx_hostid: ''
+      when: zbx_get.json.result is not defined or zbx_get.json.result | length == 0
 
     - name: Get device status from NetBox
       set_fact:
@@ -159,14 +165,19 @@
       set_fact:
         _action: '{{ "delete" if _device_status == "decommissioning" else "disable" }}'
 
-    - name: Fail if host not found (explicit)
-      when: _zbx_hostid is not defined
-      fail:
-        msg: 'Host "{{ _zbx_host }}" not found in Zabbix; nothing to {{ _action }}.'
+    - name: Log host not found in Zabbix
+      debug:
+        msg: 'Host "{{ _zbx_host }}" not found in Zabbix; will mark as removed in NetBox only.'
+      when: _zbx_hostid == ''
+
+    - name: Set host not found flag
+      set_fact:
+        _host_not_found: true
+      when: _zbx_hostid == ''
 
     # -------- Delete or disable based on status --------
     - name: Delete host in Zabbix (decommissioning status)
-      when: _zbx_hostid is defined and _action == 'delete'
+      when: _zbx_hostid is defined and _zbx_hostid != '' and _action == 'delete'
       uri:
         url: '{{ _zbx_api }}'
         method: POST
@@ -183,7 +194,7 @@
       register: zbx_delete
 
     - name: Disable host in Zabbix (other statuses)
-      when: _zbx_hostid is defined and _action == 'disable'
+      when: _zbx_hostid is defined and _zbx_hostid != '' and _action == 'disable'
       uri:
         url: '{{ _zbx_api }}'
         method: POST
@@ -202,7 +213,7 @@
       register: zbx_disable
 
     - name: Change host group to ID 75 (other statuses)
-      when: _zbx_hostid is defined and _action == 'disable'
+      when: _zbx_hostid is defined and _zbx_hostid != '' and _action == 'disable'
       uri:
         url: '{{ _zbx_api }}'
         method: POST
@@ -222,7 +233,7 @@
       register: zbx_group_change
 
     - name: Update tags - set cmdb to archived and remove others (other statuses)
-      when: _zbx_hostid is defined and _action == 'disable'
+      when: _zbx_hostid is defined and _zbx_hostid != '' and _action == 'disable'
       uri:
         url: '{{ _zbx_api }}'
         method: POST
@@ -243,7 +254,7 @@
       register: zbx_tag_change
 
     - name: Re-read host to confirm Zabbix status (only when disabled)
-      when: _action == 'disable'
+      when: _action == 'disable' and _zbx_hostid is defined and _zbx_hostid != ''
       uri:
         url: '{{ _zbx_api }}'
         method: POST
@@ -263,7 +274,9 @@
     - name: Show Zabbix status after action
       debug:
         msg: >-
-          {%- if _action == 'delete' -%}
+          {%- if _host_not_found is defined and _host_not_found -%}
+          host not found in Zabbix; will mark as removed in NetBox only
+          {%- elif _action == 'delete' -%}
           requested=delete; API reply={{ zbx_delete.json.result | default({}) }}
           {%- else -%}
           requested=disable; status={{ (zbx_verify.json.result | first).status | default('unknown') }}
@@ -315,12 +328,15 @@
         msg:
           host: '{{ _zbx_host }}'
           device_status: '{{ _device_status }}'
-          action_taken: '{{ _action }}'
+          action_taken: >-
+            {{ 'not found in Zabbix' if (_host_not_found is defined and _host_not_found) else _action }}
           nb_status_set: '{{ nb_target_status }}'
           zbx_status_after: >-
-            {{ (zbx_verify.json.result | first).status
-               if (_action == 'disable') else 'n/a (deleted)' }}
+            {{ 'not found' if (_host_not_found is defined and _host_not_found) 
+               else ((zbx_verify.json.result | first).status if (_action == 'disable') else 'n/a (deleted)') }}
           host_group_changed: >-
-            {{ 'Yes (to ID 75)' if (zbx_group_change is defined and _action == 'disable') else 'No' }}
+            {{ 'No (host not found)' if (_host_not_found is defined and _host_not_found) 
+               else ('Yes (to ID 75)' if (zbx_group_change is defined and _action == 'disable') else 'No') }}
           tags_updated: >-
-            {{ 'Yes (cmdb=archived, others removed)' if (zbx_tag_change is defined and _action == 'disable') else 'No' }}
+            {{ 'No (host not found)' if (_host_not_found is defined and _host_not_found) 
+               else ('Yes (cmdb=archived, others removed)' if (zbx_tag_change is defined and _action == 'disable') else 'No') }}
