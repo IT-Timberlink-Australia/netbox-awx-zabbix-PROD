@@ -52,7 +52,7 @@
 # =============================================================================
 
 - name: "Zabbix remove hosts (host-URL friendly, v5: default mode + set NetBox status)"
-  hosts: status_remove_pending
+  hosts: all
   connection: local
   become: false
   gather_facts: false
