@@ -3,9 +3,8 @@ plugin: netbox.netbox.nb_inventory
 config_context: false
 strict: false
 
-# Only hosts pending removal
-query_filters:
-- cf_zbp_status: "Remove Pending"
+# Get all devices and VMs, then filter by custom field in compose
+query_filters: []
 
 compose:
 zbx_status: custom_fields.zbp_status
@@ -13,6 +12,8 @@ zbx_status: custom_fields.zbp_status
 host_type: "{{ 'VM' if is_virtual else 'Device' }}"
 host_name: "{{ name }}"
 host_status: "{{ status.value | default(status) }}"
+# Filter condition
+should_remove: "{{ zbx_status == 'Remove Pending' }}"
 
 groups:
-status_remove_pending: "{{ zbx_status == 'Remove Pending' }}"
+status_remove_pending: "{{ should_remove | bool }}"
