@@ -9,6 +9,10 @@ query_filters:
 
 compose:
 zbx_status: custom_fields.zbp_status
+# Debug information
+host_type: "{{ 'VM' if is_virtual else 'Device' }}"
+host_name: "{{ name }}"
+host_status: "{{ status.value | default(status) }}"
 
 groups:
 status_remove_pending: "{{ zbx_status == 'Remove Pending' }}"

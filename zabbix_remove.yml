@@ -162,6 +162,17 @@
       set_fact:
         _device_status: '{{ hostvars[inventory_hostname].status.value | default(hostvars[inventory_hostname].status) }}'
 
+    - name: Debug host information
+      debug:
+        msg:
+          - "=== Processing Host ==="
+          - "Hostname: {{ inventory_hostname }}"
+          - "Host Type: {{ hostvars[inventory_hostname].host_type | default('Unknown') }}"
+          - "Host Name: {{ hostvars[inventory_hostname].host_name | default('Unknown') }}"
+          - "Host Status: {{ hostvars[inventory_hostname].host_status | default('Unknown') }}"
+          - "Zabbix Status: {{ hostvars[inventory_hostname].zbx_status | default('Unknown') }}"
+          - "Is Virtual: {{ hostvars[inventory_hostname].is_virtual | default(false) }}"
+
     - name: Determine action based on status
       set_fact:
         _action: '{{ "delete" if _device_status == "decommissioning" else "disable" }}'
