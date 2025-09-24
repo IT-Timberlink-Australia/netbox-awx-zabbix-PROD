@@ -5,7 +5,7 @@ strict: false
 
 # Only hosts pending removal
 query_filters:
-- custom_field_data__zbp_status: "Remove Pending"
+- cf_zbp_status: "Remove Pending"
 
 compose:
 zbx_status: custom_fields.zbp_status
