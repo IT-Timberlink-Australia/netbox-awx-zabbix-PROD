@@ -680,6 +680,14 @@
             validate_certs: "{{ nb_verify }}"
           register: device_current
 
+        - name: Debug custom fields before update
+          when: not (hostvars[inventory_hostname].is_virtual | default(false)) and device_lookup.json.results | length > 0
+          debug:
+            msg:
+              - "Current custom fields: {{ device_current.json.custom_fields | default({}) }}"
+              - "Fields to update: {{ {'zbp_status': 'Synced', 'zbp_last_sync': ansible_date_time.iso8601, 'zbp_sync_hint': ''} }}"
+              - "Merged fields: {{ (device_current.json.custom_fields | default({})) | combine({'zbp_status': 'Synced', 'zbp_last_sync': ansible_date_time.iso8601, 'zbp_sync_hint': ''}, recursive=True) }}"
+
         - name: Success writeback → NetBox via API (Device)
           when: not (hostvars[inventory_hostname].is_virtual | default(false)) and device_lookup.json.results | length > 0
           delegate_to: localhost
@@ -700,8 +708,18 @@
                     'zbp_sync_hint': ''
                   }, recursive=True)
                 }}
-            status_code: 200
+            status_code: [200, 400]
             validate_certs: "{{ nb_verify }}"
+            return_content: true
+          register: device_update_result
+
+        - name: Debug device update result
+          when: not (hostvars[inventory_hostname].is_virtual | default(false)) and device_lookup.json.results | length > 0
+          debug:
+            msg:
+              - "Update status: {{ device_update_result.status }}"
+              - "Update response: {{ device_update_result.json | default('No JSON response') }}"
+              - "Update content: {{ device_update_result.content | default('No content') }}"
 
         - name: Get VM ID from NetBox
           when: hostvars[inventory_hostname].is_virtual | default(false)
