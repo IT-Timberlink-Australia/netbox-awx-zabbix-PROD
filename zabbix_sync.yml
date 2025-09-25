@@ -652,8 +652,22 @@
                     details: "{{ _iface_details | default(omit) }}"
 
         # Success write-back
-        - name: Success writeback → NetBox via API (Device)
+        - name: Get device ID from NetBox
           when: not (hostvars[inventory_hostname].is_virtual | default(false))
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/dcim/devices/?name={{ inventory_hostname }}"
+            method: GET
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Accept: "application/json"
+            return_content: true
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+          register: device_lookup
+
+        - name: Success writeback → NetBox via API (Device)
+          when: not (hostvars[inventory_hostname].is_virtual | default(false)) and device_lookup.json.results | length > 0
           delegate_to: localhost
           uri:
             url: "{{ nb_base }}/api/plugins/netbox-zabbix/update-status/"
@@ -663,13 +677,27 @@
               Content-Type: "application/json"
             body_format: json
             body:
-              device_id: "{{ hostvars[inventory_hostname].id }}"
+              device_id: "{{ device_lookup.json.results[0].id }}"
               status: "Synced"
             status_code: 200
             validate_certs: "{{ nb_verify }}"
 
-        - name: Success writeback → NetBox via API (VM)
+        - name: Get VM ID from NetBox
           when: hostvars[inventory_hostname].is_virtual | default(false)
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/virtualization/virtual-machines/?name={{ inventory_hostname }}"
+            method: GET
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Accept: "application/json"
+            return_content: true
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+          register: vm_lookup
+
+        - name: Success writeback → NetBox via API (VM)
+          when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup.json.results | length > 0
           delegate_to: localhost
           uri:
             url: "{{ nb_base }}/api/plugins/netbox-zabbix/update-status/"
@@ -679,7 +707,7 @@
               Content-Type: "application/json"
             body_format: json
             body:
-              vm_id: "{{ hostvars[inventory_hostname].id }}"
+              vm_id: "{{ vm_lookup.json.results[0].id }}"
               status: "Synced"
             status_code: 200
             validate_certs: "{{ nb_verify }}"
@@ -689,8 +717,22 @@
           set_fact:
             _sync_err: "{{ (ansible_failed_result.msg | default(ansible_failed_task.name | default('Zabbix sync failed'))) }}"
 
-        - name: Failure writeback → NetBox via API (Device)
+        - name: Get device ID from NetBox (failure)
           when: not (hostvars[inventory_hostname].is_virtual | default(false))
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/dcim/devices/?name={{ inventory_hostname }}"
+            method: GET
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Accept: "application/json"
+            return_content: true
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+          register: device_lookup_fail
+
+        - name: Failure writeback → NetBox via API (Device)
+          when: not (hostvars[inventory_hostname].is_virtual | default(false)) and device_lookup_fail.json.results | length > 0
           delegate_to: localhost
           uri:
             url: "{{ nb_base }}/api/plugins/netbox-zabbix/update-status/"
@@ -700,13 +742,27 @@
               Content-Type: "application/json"
             body_format: json
             body:
-              device_id: "{{ hostvars[inventory_hostname].id }}"
+              device_id: "{{ device_lookup_fail.json.results[0].id }}"
               status: "Not Synced"
             status_code: 200
             validate_certs: "{{ nb_verify }}"
 
-        - name: Failure writeback → NetBox via API (VM)
+        - name: Get VM ID from NetBox (failure)
           when: hostvars[inventory_hostname].is_virtual | default(false)
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/virtualization/virtual-machines/?name={{ inventory_hostname }}"
+            method: GET
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Accept: "application/json"
+            return_content: true
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+          register: vm_lookup_fail
+
+        - name: Failure writeback → NetBox via API (VM)
+          when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup_fail.json.results | length > 0
           delegate_to: localhost
           uri:
             url: "{{ nb_base }}/api/plugins/netbox-zabbix/update-status/"
@@ -716,7 +772,7 @@
               Content-Type: "application/json"
             body_format: json
             body:
-              vm_id: "{{ hostvars[inventory_hostname].id }}"
+              vm_id: "{{ vm_lookup_fail.json.results[0].id }}"
               status: "Not Synced"
             status_code: 200
             validate_certs: "{{ nb_verify }}"
