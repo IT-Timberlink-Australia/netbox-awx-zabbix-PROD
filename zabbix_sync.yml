@@ -652,72 +652,71 @@
                     details: "{{ _iface_details | default(omit) }}"
 
         # Success write-back
-        - name: Build success payload
-          set_fact:
-            _cf_success: >-
-                  {{
-                    {'zbp_status':'Synced'}
-                    | combine( (_has_last_sync|bool) | ternary({'zbp_last_sync': lookup('pipe','date -Is')}, {}), recursive=True)
-                    | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': ''}, {}),                     recursive=True)
-                  }}
-
-        - name: Success writeback → NetBox (Device)
+        - name: Success writeback → NetBox via API (Device)
           when: not (hostvars[inventory_hostname].is_virtual | default(false))
           delegate_to: localhost
-          netbox.netbox.netbox_device:
-            netbox_url: "{{ nb_base }}"
-            netbox_token: "{{ nb_token }}"
+          uri:
+            url: "{{ nb_base }}/api/plugins/netbox-zabbix/update-status/"
+            method: POST
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
+              device_id: "{{ hostvars[inventory_hostname].id }}"
+              status: "Synced"
+            status_code: 200
             validate_certs: "{{ nb_verify }}"
-            data:
-              name: "{{ _nb_name }}"
-              custom_fields: "{{ _cf_success }}"
-            state: present
 
-        - name: Success writeback → NetBox (VM)
+        - name: Success writeback → NetBox via API (VM)
           when: hostvars[inventory_hostname].is_virtual | default(false)
           delegate_to: localhost
-          netbox.netbox.netbox_virtual_machine:
-            netbox_url: "{{ nb_base }}"
-            netbox_token: "{{ nb_token }}"
+          uri:
+            url: "{{ nb_base }}/api/plugins/netbox-zabbix/update-status/"
+            method: POST
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
+              vm_id: "{{ hostvars[inventory_hostname].id }}"
+              status: "Synced"
+            status_code: 200
             validate_certs: "{{ nb_verify }}"
-            data:
-              name: "{{ _nb_name }}"
-              custom_fields: "{{ _cf_success }}"
-            state: present
 
       rescue:
         - name: Capture error
           set_fact:
             _sync_err: "{{ (ansible_failed_result.msg | default(ansible_failed_task.name | default('Zabbix sync failed'))) }}"
 
-        - name: Build failure payload
-          set_fact:
-            _cf_fail: >-
-                  {{
-                    {'zbp_status':'Not Synced'}
-                    | combine( (_has_sync_hint|bool) | ternary({'zbp_sync_hint': _sync_err}, {}), recursive=True)
-                  }}
-
-        - name: Failure writeback → NetBox (Device)
+        - name: Failure writeback → NetBox via API (Device)
           when: not (hostvars[inventory_hostname].is_virtual | default(false))
           delegate_to: localhost
-          netbox.netbox.netbox_device:
-            netbox_url: "{{ nb_base }}"
-            netbox_token: "{{ nb_token }}"
+          uri:
+            url: "{{ nb_base }}/api/plugins/netbox-zabbix/update-status/"
+            method: POST
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
+              device_id: "{{ hostvars[inventory_hostname].id }}"
+              status: "Not Synced"
+            status_code: 200
             validate_certs: "{{ nb_verify }}"
-            data:
-              name: "{{ _nb_name }}"
-              custom_fields: "{{ _cf_fail }}"
-            state: present
 
-        - name: Failure writeback → NetBox (VM)
+        - name: Failure writeback → NetBox via API (VM)
           when: hostvars[inventory_hostname].is_virtual | default(false)
           delegate_to: localhost
-          netbox.netbox.netbox_virtual_machine:
-            netbox_url: "{{ nb_base }}"
-            netbox_token: "{{ nb_token }}"
+          uri:
+            url: "{{ nb_base }}/api/plugins/netbox-zabbix/update-status/"
+            method: POST
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
+              vm_id: "{{ hostvars[inventory_hostname].id }}"
+              status: "Not Synced"
+            status_code: 200
             validate_certs: "{{ nb_verify }}"
-            data:
-              name: "{{ _nb_name }}"
-              custom_fields: "{{ _cf_fail }}"
-            state: present
