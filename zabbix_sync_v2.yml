@@ -739,6 +739,41 @@
             validate_certs: "{{ nb_verify }}"
           register: vm_current
 
+        - name: Debug VM custom fields before filtering
+          when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup.json.results | length > 0
+          debug:
+            msg:
+              - "=== VM Custom Fields Debug ==="
+              - "VM ID: {{ vm_lookup.json.results[0].id }}"
+              - "Raw custom_fields: {{ vm_current.json.custom_fields | default('No custom fields') }}"
+              - "Custom field keys: {{ vm_current.json.custom_fields | default({}) | dict2items | map(attribute='key') | list }}"
+              - "Contains _nbzbx_manual_sync: {{ '_nbzbx_manual_sync' in (vm_current.json.custom_fields | default({}) | dict2items | map(attribute='key') | list) }}"
+
+        - name: Debug filtered custom fields before sending
+          when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup.json.results | length > 0
+          set_fact:
+            _filtered_custom_fields: >-
+              {{
+                (vm_current.json.custom_fields | default({}))
+                | dict2items
+                | selectattr('key', 'in', ['zbp_status', 'zbp_last_sync', 'zbp_sync_hint', 'zbp_vname', 'zbp_int_ip', 'zbp_pri_template_name_id', 'zbp_pri_template_int_id', 'zbp_proxy_id', 'zbp_group_id', 'zbp_sla_code', 'zbp_platform', 'zbp_site', 'zb_extra_templates', 'zb_mon_env', 'mon_req', 'asset_name'])
+                | items2dict
+                | combine({
+                  'zbp_status': 'Synced',
+                  'zbp_last_sync': ansible_date_time.iso8601,
+                  'zbp_sync_hint': ''
+                }, recursive=True)
+              }}
+
+        - name: Debug final custom fields being sent
+          when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup.json.results | length > 0
+          debug:
+            msg:
+              - "=== Final Custom Fields Being Sent ==="
+              - "Filtered custom_fields: {{ _filtered_custom_fields }}"
+              - "Filtered field keys: {{ _filtered_custom_fields | dict2items | map(attribute='key') | list }}"
+              - "Contains _nbzbx_manual_sync after filtering: {{ '_nbzbx_manual_sync' in (_filtered_custom_fields | dict2items | map(attribute='key') | list) }}"
+
         - name: Success writeback → NetBox via API (VM)
           when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup.json.results | length > 0
           delegate_to: localhost
@@ -750,18 +785,7 @@
               Content-Type: "application/json"
             body_format: json
             body:
-              custom_fields: >-
-                {{
-                  (vm_current.json.custom_fields | default({}))
-                  | dict2items
-                  | selectattr('key', 'in', ['zbp_status', 'zbp_last_sync', 'zbp_sync_hint', 'zbp_vname', 'zbp_int_ip', 'zbp_pri_template_name_id', 'zbp_pri_template_int_id', 'zbp_proxy_id', 'zbp_group_id', 'zbp_sla_code', 'zbp_platform', 'zbp_site', 'zb_extra_templates', 'zb_mon_env', 'mon_req', 'asset_name'])
-                  | items2dict
-                  | combine({
-                    'zbp_status': 'Synced',
-                    'zbp_last_sync': ansible_date_time.iso8601,
-                    'zbp_sync_hint': ''
-                  }, recursive=True)
-                }}
+              custom_fields: "{{ _filtered_custom_fields }}"
             status_code: 200
             validate_certs: "{{ nb_verify }}"
 
@@ -851,6 +875,40 @@
             validate_certs: "{{ nb_verify }}"
           register: vm_current_fail
 
+        - name: Debug VM custom fields before filtering (failure)
+          when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup_fail.json.results | length > 0
+          debug:
+            msg:
+              - "=== VM Custom Fields Debug (Failure) ==="
+              - "VM ID: {{ vm_lookup_fail.json.results[0].id }}"
+              - "Raw custom_fields: {{ vm_current_fail.json.custom_fields | default('No custom fields') }}"
+              - "Custom field keys: {{ vm_current_fail.json.custom_fields | default({}) | dict2items | map(attribute='key') | list }}"
+              - "Contains _nbzbx_manual_sync: {{ '_nbzbx_manual_sync' in (vm_current_fail.json.custom_fields | default({}) | dict2items | map(attribute='key') | list) }}"
+
+        - name: Debug filtered custom fields before sending (failure)
+          when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup_fail.json.results | length > 0
+          set_fact:
+            _filtered_custom_fields_fail: >-
+              {{
+                (vm_current_fail.json.custom_fields | default({}))
+                | dict2items
+                | selectattr('key', 'in', ['zbp_status', 'zbp_last_sync', 'zbp_sync_hint', 'zbp_vname', 'zbp_int_ip', 'zbp_pri_template_name_id', 'zbp_pri_template_int_id', 'zbp_proxy_id', 'zbp_group_id', 'zbp_sla_code', 'zbp_platform', 'zbp_site', 'zb_extra_templates', 'zb_mon_env', 'mon_req', 'asset_name'])
+                | items2dict
+                | combine({
+                  'zbp_status': 'Not Synced',
+                  'zbp_sync_hint': _sync_err
+                }, recursive=True)
+              }}
+
+        - name: Debug final custom fields being sent (failure)
+          when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup_fail.json.results | length > 0
+          debug:
+            msg:
+              - "=== Final Custom Fields Being Sent (Failure) ==="
+              - "Filtered custom_fields: {{ _filtered_custom_fields_fail }}"
+              - "Filtered field keys: {{ _filtered_custom_fields_fail | dict2items | map(attribute='key') | list }}"
+              - "Contains _nbzbx_manual_sync after filtering: {{ '_nbzbx_manual_sync' in (_filtered_custom_fields_fail | dict2items | map(attribute='key') | list) }}"
+
         - name: Failure writeback → NetBox via API (VM)
           when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup_fail.json.results | length > 0
           delegate_to: localhost
@@ -862,17 +920,7 @@
               Content-Type: "application/json"
             body_format: json
             body:
-              custom_fields: >-
-                {{
-                  (vm_current_fail.json.custom_fields | default({}))
-                  | dict2items
-                  | selectattr('key', 'in', ['zbp_status', 'zbp_last_sync', 'zbp_sync_hint', 'zbp_vname', 'zbp_int_ip', 'zbp_pri_template_name_id', 'zbp_pri_template_int_id', 'zbp_proxy_id', 'zbp_group_id', 'zbp_sla_code', 'zbp_platform', 'zbp_site', 'zb_extra_templates', 'zb_mon_env', 'mon_req', 'asset_name'])
-                  | items2dict
-                  | combine({
-                    'zbp_status': 'Not Synced',
-                    'zbp_sync_hint': _sync_err
-                  }, recursive=True)
-                }}
+              custom_fields: "{{ _filtered_custom_fields_fail }}"
             status_code: 200
             validate_certs: "{{ nb_verify }}"
 
