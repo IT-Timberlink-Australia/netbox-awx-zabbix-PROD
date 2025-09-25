@@ -13,3 +13,5 @@ dev-sync:
 
 dev-remove:
 	ansible-playbook -i inventory/netbox_remove.yml zabbix_remove.yml --check
+dev-remove:
+	ansible-playbook -i inventory/netbox_remove.yml zabbix_remove.yml --check
