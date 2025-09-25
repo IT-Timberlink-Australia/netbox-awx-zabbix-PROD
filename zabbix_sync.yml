@@ -776,3 +776,4 @@
               status: "Not Synced"
             status_code: 200
             validate_certs: "{{ nb_verify }}"
+
