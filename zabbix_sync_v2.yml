@@ -1,0 +1,879 @@
+---
+# =============================================================================
+# NetBox to Zabbix Host Synchronization Playbook v2
+# =============================================================================
+# Description: Synchronizes NetBox device/VM inventory into Zabbix monitoring
+#              system with bidirectional status tracking via custom fields.
+#              This version includes enhanced field filtering to prevent
+#              unknown custom field errors.
+#
+# Author: Infrastructure Team
+# Version: 2.1
+# Last Updated: 2025-09-25
+#
+# Requirements:
+#   - Ansible 2.9+
+#   - netbox.netbox collection
+#   - Zabbix API access with appropriate permissions
+#   - NetBox API access with custom field write permissions
+#
+# Environment Variables Required:
+#   - ZABBIX_API_URL: Zabbix API endpoint (e.g., https://zabbix.example.com/api_jsonrpc.php)
+#   - ZABBIX_API_TOKEN: Zabbix API authentication token
+#   - ZABBIX_VERIFY: SSL certificate verification (default: false)
+#   - NETBOX_API: NetBox API endpoint (e.g., https://netbox.example.com/api)
+#   - NETBOX_TOKEN: NetBox API authentication token
+#   - NETBOX_VERIFY: SSL certificate verification (default: true)
+#
+# NetBox Custom Fields Required:
+#   - zbp_vname: Visible name in Zabbix (optional, defaults to hostname)
+#   - zbp_pri_template_name_id: Primary Zabbix template ID
+#   - zb_extra_templates: Additional template IDs (list)
+#   - zbp_pri_template_int_id: Interface type (1=Agent, 2=SNMP, 3=IPMI, 4=JMX)
+#   - zbp_int_ip: Interface IP address
+#   - zbp_group_id: Zabbix host group ID
+#   - zbp_proxy_id: Zabbix proxy ID (optional)
+#   - zb_mon_env: Environment tag (optional)
+#   - zbp_platform: OS platform tag (optional)
+#   - zbp_site: Site tag (optional)
+#   - zbp_sla_code: SLA code tag (optional)
+#   - zbp_status: Sync status (managed by playbook)
+#   - zbp_last_sync: Last sync timestamp (managed by playbook)
+#   - zbp_sync_hint: Sync error details (managed by playbook)
+#
+# Usage:
+#   ansible-playbook -i inventory zabbix_sync_v2.yml
+#
+# Features:
+#   - Creates or updates Zabbix hosts based on NetBox inventory
+#   - Supports multiple interface types with appropriate configurations
+#   - Handles both devices and virtual machines
+#   - Provides comprehensive error handling and status tracking
+#   - Validates proxy existence and permissions
+#   - Manages interface configuration (ensures single primary interface)
+#   - Bidirectional status updates to NetBox custom fields
+#   - Enhanced field filtering to prevent unknown custom field errors
+#   - Robust handling of orphaned custom fields (e.g., _nbzbx_manual_sync)
+# =============================================================================
+
+- name: Sync NetBox hosts into Zabbix (token-only)
+  hosts: all
+  connection: local
+  gather_facts: true
+
+  vars:
+    # AWX env/cred vars
+    zbx_url:   "{{ lookup('env','ZABBIX_API_URL') }}"     # https://itmonitor.../zabbix/api_jsonrpc.php
+    zbx_token: "{{ lookup('env','ZABBIX_API_TOKEN') }}"
+    zbx_verify: "{{ (lookup('env','ZABBIX_VERIFY') | default('false')) | bool }}"
+    nb_url:    "{{ lookup('env','NETBOX_API') }}"         # https://netbox...  (base or /api)
+    nb_token:  "{{ lookup('env','NETBOX_TOKEN') }}"
+    nb_verify: "{{ (lookup('env','NETBOX_VERIFY') | default('true')) | bool }}"
+
+    # Zabbix default ports by interface type
+    _iface_default_ports:
+      "1": "10050"   # Agent
+      "2": "161"     # SNMP
+      "3": "623"     # IPMI
+      "4": "12345"   # JMX
+
+  tasks:
+    - name: Validate inputs present
+      assert:
+        that:
+          - (zbx_url   | length) > 0
+          - (zbx_token | length) > 0
+          - (nb_url    | length) > 0
+          - (nb_token  | length) > 0
+
+    # ---------- Zabbix URL parsing (robust; no doubled api_jsonrpc.php) ----------
+    - name: Parse Zabbix URL (phase 1)
+      set_fact:
+        zbx_scheme_https: "{{ zbx_url | regex_search('^https://') is truthy }}"
+        zbx_hostport: "{{ (zbx_url | regex_replace('^https?://','')) | regex_replace('/.*$','') }}"
+        zbx_path_only: "{{ '/' ~ (zbx_url | regex_replace('^https?://[^/]+','') | regex_replace('^/+','')) }}"
+
+    - name: Parse Zabbix URL (phase 2)
+      set_fact:
+        zbx_api: >-
+          {{
+            (zbx_url | regex_replace('/+$',''))
+            | regex_replace('(?i)/api_jsonrpc\\.php$','')
+            ~ '/api_jsonrpc.php'
+          }}
+        zbx_path_clean: "{{ zbx_path_only | regex_replace('/+$','') }}"
+        _auth: "{{ zbx_token }}"
+
+    - name: Parse Zabbix URL (phase 3)
+      set_fact:
+        zbx_pathroot: >-
+          {{
+            (zbx_path_clean | regex_replace('(?i)/api_jsonrpc\\.php$',''))
+            | regex_replace('^$','/')
+          }}
+
+    # # one-off sanity
+    # - debug:
+    #     msg: { zbx_api: "{{ zbx_api }}", zbx_hostport: "{{ zbx_hostport }}", zbx_pathroot: "{{ zbx_pathroot }}" }
+    #   verbosity: 1
+
+    # ---------- NetBox URL normalize ----------
+    - name: Normalize NetBox URL (clean)
+      set_fact:
+        _nb_clean: "{{ nb_url | regex_replace('/+$','') }}"
+
+    - name: Derive NetBox API root and base
+      set_fact:
+        nb_api_root: "{{ (_nb_clean | regex_search('/api$')) | ternary(_nb_clean, _nb_clean ~ '/api') }}"
+        nb_base:     "{{ _nb_clean | regex_replace('/api$','') }}"
+
+    # ---------- Probe CF presence for write-back ----------
+    - name: Probe NetBox CF zbp_last_sync
+      uri:
+        url: "{{ nb_api_root }}/extras/custom-fields/?name=zbp_last_sync"
+        method: GET
+        headers: { Authorization: "Token {{ nb_token }}", Accept: "application/json" }
+        return_content: true
+        status_code: 200
+        validate_certs: "{{ nb_verify }}"
+      register: _probe_last_sync
+
+    - name: Probe NetBox CF zbp_sync_hint
+      uri:
+        url: "{{ nb_api_root }}/extras/custom-fields/?name=zbp_sync_hint"
+        method: GET
+        headers: { Authorization: "Token {{ nb_token }}", Accept: "application/json" }
+        return_content: true
+        status_code: 200
+        validate_certs: "{{ nb_verify }}"
+      register: _probe_sync_hint
+
+    - name: Set CF presence flags
+      set_fact:
+        _has_last_sync: "{{ (_probe_last_sync.json.results | default([]) | length) > 0 }}"
+        _has_sync_hint: "{{ (_probe_sync_hint.json.results | default([]) | length) > 0 }}"
+
+    # ---------- Normalize vars from NetBox inventory ----------
+    - name: Normalize host vars from NetBox
+      vars:
+        cf: "{{ hostvars[inventory_hostname].custom_fields | default({}) }}"
+      set_fact:
+        _nb_name: "{{ inventory_hostname }}"
+        _nb_visible: "{{ cf.zbp_vname | default(inventory_hostname) }}"
+        _tmpl_primary_id: "{{ (cf.zbp_pri_template_name_id | string) if (cf.zbp_pri_template_name_id is defined) else '' }}"
+        _tmpl_extra_ids_raw: "{{ cf.zb_extra_templates | default([]) }}"
+        _iface_type: "{{ (cf.zbp_pri_template_int_id | string) if (cf.zbp_pri_template_int_id is defined) else '' }}"
+        _iface_ip: "{{ cf.zbp_int_ip | default('') }}"
+        _group_id: "{{ (cf.zbp_group_id | string) if (cf.zbp_group_id is defined) else '' }}"
+        _tag_env: "{{ cf.zb_mon_env | default('') }}"
+        _tag_os: "{{ cf.zbp_platform | default('') }}"
+        _tag_site: "{{ cf.zbp_site | default('') }}"
+        _tag_sla: "{{ cf.zbp_sla_code | default('') }}"
+        _tag_nb_status: "{{ hostvars[inventory_hostname].status.value | default('') }}"
+        _proxy_cf_raw: "{{ cf.zbp_proxy_id | default('') }}"
+
+    - name: Coerce extra templates to list
+      set_fact:
+        _tmpl_extra_ids: >-
+          {{
+            (
+              _tmpl_extra_ids_raw
+              if (_tmpl_extra_ids_raw is sequence and (_tmpl_extra_ids_raw is not string))
+              else ( [ _tmpl_extra_ids_raw ] if (_tmpl_extra_ids_raw | default('') | length > 0) else [] )
+            )
+            | map('string') | list
+          }}
+
+    - name: Build desired template id list
+      set_fact:
+        _desired_template_ids: >-
+          {{
+            ( [ _tmpl_primary_id ] if _tmpl_primary_id | length > 0 else [] )
+            | union(_tmpl_extra_ids)
+            | unique
+          }}
+
+    - name: Fail fast if key inputs are missing
+      assert:
+        that:
+          - _iface_ip | length > 0
+          - _iface_type | length > 0
+          - _desired_template_ids | length > 0
+          - _group_id | length > 0
+        fail_msg: "Missing IP/interface/template/group for {{ inventory_hostname }}"
+
+    - name: Convert IDs to ints
+      set_fact:
+        _group_ids_int: [ "{{ _group_id | int }}" ]
+        _tmpl_ids_int: "{{ _desired_template_ids | map('int') | list }}"
+
+    - name: Build interface details (SNMP only)
+      set_fact:
+        _iface_details: "{{ {'version': 2, 'community': '{$SNMP_COMMUNITY}', 'bulk': 1} }}"
+      when: (_iface_type | int) == 2
+
+    - name: Build interface details (Agent with PSK)
+      set_fact:
+        _iface_details:
+          tls_connect: 2
+          tls_accept: 2
+          tls_psk_identity: 'tl-agent-bel-psk'
+          tls_psk: '188ffc5a6a83ac39be5b6fa4284d4c38948808623905ffb8ea437e19380d541b'
+      when: (_iface_type | int) == 1
+
+    - name: Set empty interface details for other types
+      set_fact:
+        _iface_details: "{{ {} }}"
+      when: (_iface_type | int) not in [1, 2]
+
+    - name: Debug proxy data from NetBox
+      debug:
+        msg:
+          - "Raw proxy data from NetBox: '{{ _proxy_cf_raw }}'"
+          - "Type: {{ _proxy_cf_raw | type_debug }}"
+
+    - name: Debug PSK configuration
+      debug:
+        msg:
+          - "Interface Type: {{ _iface_type }}"
+          - "PSK will be applied for Agent interfaces (type 1)"
+
+    - name: Normalize proxy id (robust)
+      set_fact:
+        _proxy_id_int: "{{ (_proxy_cf_raw | default('0') | string | regex_search('\\d+') | default('0')) | int }}"
+
+    - name: Check if proxy is Zabbix server (10084)
+      set_fact:
+        _is_zabbix_server: "{{ (_proxy_id_int | int) == 10084 }}"
+
+    - name: Debug normalized proxy id
+      debug:
+        msg: 
+          - "Normalized proxy ID: {{ _proxy_id_int }}"
+          - "Is Zabbix server (10084): {{ _is_zabbix_server }}"
+          - "Note: Proxy ID 10084 (Zabbix server) will skip proxy parameters"
+
+    - name: Validate proxy id in Zabbix (when provided)
+      when: (_proxy_id_int | int) > 0 and not _is_zabbix_server
+      uri:
+        url: "{{ zbx_api }}"
+        method: POST
+        headers: { Content-Type: "application/json-rpc" }
+        body_format: json
+        validate_certs: "{{ zbx_verify }}"
+        body:
+          jsonrpc: "2.0"
+          method: "proxy.get"
+          id: 41
+          auth: "{{ _auth }}"
+          params:
+            output: [ "proxyid", "name" ]
+            proxyids: [ "{{ _proxy_id_int }}" ]
+      register: _proxy_chk
+
+    - name: Debug proxy validation result
+      when: (_proxy_id_int | int) > 0 and not _is_zabbix_server
+      debug:
+        msg:
+          - "Proxy validation result: {{ _proxy_chk.json.result | default('No result') }}"
+          - "Proxy validation status code: {{ _proxy_chk.status | default('No status') }}"
+
+    - name: Assert proxy exists or visible to the token
+      when: (_proxy_id_int | int) > 0 and not _is_zabbix_server
+      assert:
+        that: [ (_proxy_chk.json.result | length | int) == 1 ]
+        fail_msg: "Zabbix proxy id {{ _proxy_id_int }} not found or token lacks permission."
+
+    # ---------- Zabbix host upsert + reconcile + NetBox writeback ----------
+    - name: Zabbix host upsert + reconcile + NetBox writeback
+      block:
+
+        # Get host
+        - name: ZBX host.get by name
+          uri:
+            url: "{{ zbx_api }}"
+            method: POST
+            headers: { Content-Type: "application/json-rpc" }
+            body_format: json
+            validate_certs: "{{ zbx_verify }}"
+            body:
+              jsonrpc: "2.0"
+              method: "host.get"
+              id: 1
+              auth: "{{ _auth }}"
+              params:
+                filter: { host: [ "{{ _nb_name }}" ] }
+                output: [ "hostid", "name", "host", "proxy_hostid" ]
+          register: _host_get
+
+        - name: Cache hostid if exists
+          set_fact:
+            _host_present: "{{ (_host_get.json.result | default([]) | length) > 0 }}"
+
+        - name: Set hostid when present
+          set_fact:
+            _hostid: "{{ _host_get.json.result[0].hostid | string }}"
+          when: _host_present | bool
+
+        # Build arrays
+        - name: Build Zabbix arrays
+          set_fact:
+            _zbx_groups_json: >-
+              [{% for gid in _group_ids_int %}{"groupid":"{{ gid }}"}{% if not loop.last %},{% endif %}{% endfor %}]
+            _zbx_templates_json: >-
+              [{% for tid in _tmpl_ids_int %}{"templateid":"{{ tid }}"}{% if not loop.last %},{% endif %}{% endfor %}]
+            _zbx_tags_json: >-
+              [
+                {"tag":"cmdb","value":"synced"}
+                {% if _tag_env|default('') %}, {"tag":"environment","value":"{{ _tag_env }}"}{% endif %}
+                {% if _tag_os|default('') %}, {"tag":"os","value":"{{ _tag_os }}"}{% endif %}
+                {% if _tag_site|default('') %}, {"tag":"site","value":"{{ _tag_site }}"}{% endif %}
+                {% if _tag_sla|default('') %}, {"tag":"device","value":"{{ _tag_sla }}"}{% endif %}
+                {% if _tag_nb_status|default('') %}, {"tag":"nb_status","value":"{{ _tag_nb_status }}"}{% endif %}
+              ]
+
+        - name: Derive desired Zabbix status from NetBox status (active=enabled, else disabled)
+          set_fact:
+            _nb_status_norm: "{{ _tag_nb_status | default('', true) | string | lower }}"
+
+        - name: Set Zabbix desired status
+          set_fact:
+            _zbx_desired_status: "{{ 0 if _nb_status_norm == 'active' else 1 }}"
+
+        # Create or update host (replace groups & templates). No Jinja blocks inside mappings!
+        - name: Debug proxy configuration summary
+          debug:
+            msg:
+              - "Proxy ID from NetBox: {{ _proxy_id_int }}"
+              - "Is Zabbix server (10084): {{ _is_zabbix_server }}"
+              - "Will use proxy: {{ 'Yes' if ((_proxy_id_int | int) > 0 and not _is_zabbix_server) else 'No (direct Zabbix server monitoring)' }}"
+
+        - name: Build host.create request body (with proxy)
+          when: _hostid is not defined and (_proxy_id_int | int) > 0 and not _is_zabbix_server
+          set_fact:
+            _host_create_body:
+              jsonrpc: "2.0"
+              method: "host.create"
+              id: 2
+              auth: "{{ _auth }}"
+              params:
+                host: "{{ _nb_name }}"
+                name: "{{ _nb_visible }}"
+                groups: "{{ _zbx_groups_json | from_yaml }}"
+                templates: "{{ _zbx_templates_json | from_yaml }}"
+                proxyid: "{{ _proxy_id_int | int }}"
+                monitored_by: 1
+                tags: "{{ _zbx_tags_json | from_yaml }}"
+                status: "{{ _zbx_desired_status | default(1) }}"
+                tls_connect: "{{ _iface_details.tls_connect | default(1) }}"
+                tls_accept: "{{ _iface_details.tls_accept | default(1) }}"
+                tls_psk_identity: "{{ _iface_details.tls_psk_identity | default('') }}"
+                tls_psk: "{{ _iface_details.tls_psk | default('') }}"
+                interfaces:
+                  - type: "{{ _iface_type | int }}"
+                    main: 1
+                    useip: 1
+                    ip: "{{ _iface_ip }}"
+                    dns: ""
+                    port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
+                    details: "{{ _iface_details | default(omit) }}"
+
+        - name: Build host.create request body (no proxy)
+          when: _hostid is not defined and ((_proxy_id_int | int) == 0 or _is_zabbix_server)
+          set_fact:
+            _host_create_body:
+              jsonrpc: "2.0"
+              method: "host.create"
+              id: 2
+              auth: "{{ _auth }}"
+              params:
+                host: "{{ _nb_name }}"
+                name: "{{ _nb_visible }}"
+                groups: "{{ _zbx_groups_json | from_yaml }}"
+                templates: "{{ _zbx_templates_json | from_yaml }}"
+                tags: "{{ _zbx_tags_json | from_yaml }}"
+                status: "{{ _zbx_desired_status | default(1) }}"
+                tls_connect: "{{ _iface_details.tls_connect | default(1) }}"
+                tls_accept: "{{ _iface_details.tls_accept | default(1) }}"
+                tls_psk_identity: "{{ _iface_details.tls_psk_identity | default('') }}"
+                tls_psk: "{{ _iface_details.tls_psk | default('') }}"
+                interfaces:
+                  - type: "{{ _iface_type | int }}"
+                    main: 1
+                    useip: 1
+                    ip: "{{ _iface_ip }}"
+                    dns: ""
+                    port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
+                    details: "{{ _iface_details | default(omit) }}"
+
+        - name: Debug proxy_hostid in request body
+          when: _hostid is not defined
+          debug:
+            msg:
+              - "proxyid value: {{ _host_create_body.params.proxyid | default('NOT SET (no proxy)') }}"
+              - "proxyid type: {{ _host_create_body.params.proxyid | type_debug | default('NOT SET') }}"
+              - "Is Zabbix server (10084): {{ _is_zabbix_server }}"
+              - "Expected behavior: {{ 'Proxy parameters included' if ((_proxy_id_int | int) > 0 and not _is_zabbix_server) else 'No proxy parameters' }}"
+
+        - name: Debug host-level PSK settings (create)
+          when: _hostid is not defined
+          debug:
+            msg:
+              - "Host-level TLS Connect: {{ _host_create_body.params.tls_connect }}"
+              - "Host-level TLS Accept: {{ _host_create_body.params.tls_accept }}"
+              - "Host-level PSK Identity: {{ _host_create_body.params.tls_psk_identity }}"
+              - "Host-level PSK Key: {{ _host_create_body.params.tls_psk | length }} characters"
+
+        - name: ZBX host.create (if absent)
+          when: _hostid is not defined
+          uri:
+            url: "{{ zbx_api }}"
+            method: POST
+            headers: { Content-Type: "application/json-rpc" }
+            body_format: json
+            validate_certs: "{{ zbx_verify }}"
+            body: "{{ _host_create_body }}"
+          register: _host_create
+
+        - name: Debug host.create response
+          when: _hostid is not defined
+          debug:
+            msg:
+              - "Host create response: {{ _host_create.json | default('No JSON response') }}"
+              - "Host create status: {{ _host_create.status | default('No status') }}"
+              - "Host create msg: {{ _host_create.msg | default('No message') }}"
+
+        - name: Debug host.create failure
+          when: _hostid is not defined and (_host_create.json is not defined or _host_create.json.result is not defined)
+          debug:
+            msg:
+              - "Host create failed - cannot cache hostid"
+              - "Response: {{ _host_create.json | default('No JSON response') }}"
+              - "Status: {{ _host_create.status | default('No status') }}"
+              - "Message: {{ _host_create.msg | default('No message') }}"
+
+        - name: Cache hostid from create
+          when: _hostid is not defined and _host_create.json is defined and _host_create.json.result is defined
+          set_fact:
+            _hostid: "{{ _host_create.json.result.hostids[0] }}"
+
+
+        - name: Build host.update request body (with proxy)
+          when: _hostid is defined and (_proxy_id_int | int) > 0 and not _is_zabbix_server
+          set_fact:
+            _host_update_body:
+              jsonrpc: "2.0"
+              method: "host.update"
+              id: 3
+              auth: "{{ _auth }}"
+              params:
+                hostid: "{{ _hostid }}"
+                status: "{{ _zbx_desired_status | default(1) }}"
+                host: "{{ _nb_name }}"
+                name: "{{ _nb_visible }}"
+                groups: "{{ _zbx_groups_json | from_yaml }}"
+                templates: "{{ _zbx_templates_json | from_yaml }}"
+                proxyid: "{{ _proxy_id_int | int }}"
+                monitored_by: 1
+                tags: "{{ _zbx_tags_json | from_yaml }}"
+                tls_connect: "{{ _iface_details.tls_connect | default(1) }}"
+                tls_accept: "{{ _iface_details.tls_accept | default(1) }}"
+                tls_psk_identity: "{{ _iface_details.tls_psk_identity | default('') }}"
+                tls_psk: "{{ _iface_details.tls_psk | default('') }}"
+
+        - name: Build host.update request body (no proxy)
+          when: _hostid is defined and ((_proxy_id_int | int) == 0 or _is_zabbix_server)
+          set_fact:
+            _host_update_body:
+              jsonrpc: "2.0"
+              method: "host.update"
+              id: 3
+              auth: "{{ _auth }}"
+              params:
+                hostid: "{{ _hostid }}"
+                status: "{{ _zbx_desired_status | default(1) }}"
+                host: "{{ _nb_name }}"
+                name: "{{ _nb_visible }}"
+                groups: "{{ _zbx_groups_json | from_yaml }}"
+                templates: "{{ _zbx_templates_json | from_yaml }}"
+                tags: "{{ _zbx_tags_json | from_yaml }}"
+                tls_connect: "{{ _iface_details.tls_connect | default(1) }}"
+                tls_accept: "{{ _iface_details.tls_accept | default(1) }}"
+                tls_psk_identity: "{{ _iface_details.tls_psk_identity | default('') }}"
+                tls_psk: "{{ _iface_details.tls_psk | default('') }}"
+
+        - name: Debug host.update request body
+          when: _hostid is defined
+          debug:
+            msg: "Host update request body: {{ _host_update_body | to_nice_json }}"
+
+        - name: Debug proxy_hostid in update request body
+          when: _hostid is defined
+          debug:
+            msg:
+              - "proxyid value: {{ _host_update_body.params.proxyid | default('NOT SET (no proxy)') }}"
+              - "proxyid type: {{ _host_update_body.params.proxyid | type_debug | default('NOT SET') }}"
+              - "Is Zabbix server (10084): {{ _is_zabbix_server }}"
+              - "Expected behavior: {{ 'Proxy parameters included' if ((_proxy_id_int | int) > 0 and not _is_zabbix_server) else 'No proxy parameters' }}"
+
+        - name: Debug host-level PSK settings (update)
+          when: _hostid is defined
+          debug:
+            msg:
+              - "Host-level TLS Connect: {{ _host_update_body.params.tls_connect }}"
+              - "Host-level TLS Accept: {{ _host_update_body.params.tls_accept }}"
+              - "Host-level PSK Identity: {{ _host_update_body.params.tls_psk_identity }}"
+              - "Host-level PSK Key: {{ _host_update_body.params.tls_psk | length }} characters"
+
+        - name: ZBX host.update (if present)
+          when: _hostid is defined
+          uri:
+            url: "{{ zbx_api }}"
+            method: POST
+            headers: { Content-Type: "application/json-rpc" }
+            body_format: json
+            validate_certs: "{{ zbx_verify }}"
+            body: "{{ _host_update_body }}"
+          register: _host_update
+
+        - name: Debug host.update response
+          when: _hostid is defined
+          debug:
+            msg:
+              - "Host update response: {{ _host_update.json | default('No JSON response') }}"
+              - "Host update status: {{ _host_update.status | default('No status') }}"
+              - "Host update msg: {{ _host_update.msg | default('No message') }}"
+
+        # Ensure only one primary interface with correct type/IP
+        - name: Debug _hostid variable before Fetch interfaces
+          debug:
+            msg:
+              - "_hostid is defined: {{ _hostid is defined }}"
+              - "_hostid value: {{ _hostid | default('UNDEFINED') }}"
+              - "_hostid type: {{ _hostid | type_debug | default('UNDEFINED') }}"
+
+        - name: Fetch interfaces
+          when: _hostid is defined and _hostid != ""
+          uri:
+            url: "{{ zbx_api }}"
+            method: POST
+            headers: { Content-Type: "application/json-rpc" }
+            body_format: json
+            return_content: true
+            validate_certs: "{{ zbx_verify }}"
+            body:
+              jsonrpc: "2.0"
+              method: "host.get"
+              id: 5
+              auth: "{{ _auth }}"
+              params:
+                output: [ "hostid", "proxy_hostid" ]
+                selectTags: [ "tag", "value" ]
+                selectInterfaces: [ "interfaceid", "type", "ip", "main" ]
+                hostids: [ "{{ _hostid }}" ]
+          register: _hostget2
+
+        - name: Verify proxy assignment with explicit host.get
+          when: _hostid is defined and (_proxy_id_int | int) > 0 and not _is_zabbix_server
+          uri:
+            url: "{{ zbx_api }}"
+            method: POST
+            headers: { Content-Type: "application/json-rpc" }
+            body_format: json
+            validate_certs: "{{ zbx_verify }}"
+            body:
+              jsonrpc: "2.0"
+              method: "host.get"
+              id: 6
+              auth: "{{ _auth }}"
+              params:
+                output: [ "hostid", "proxy_hostid" ]
+                hostids: [ "{{ _hostid }}" ]
+          register: _host_proxy_check
+
+        - name: Debug explicit proxy check
+          when: (_proxy_id_int | int) > 0 and not _is_zabbix_server
+          debug:
+            msg:
+              - "Explicit proxy check result: {{ _host_proxy_check.json.result[0] | default('No result') }}"
+              - "Proxy_hostid from explicit check: {{ _host_proxy_check.json.result[0].proxy_hostid | default('No proxy assigned') }}"
+
+        - name: Debug current proxy assignment in Zabbix
+          when: _hostid is defined and _hostget2 is defined
+          debug:
+            msg:
+              - "Current proxy_hostid in Zabbix: {{ _hostget2.json.result[0].proxy_hostid | default('No proxy assigned') }}"
+              - "Expected proxy_hostid: {{ _proxy_id_int if (_proxy_id_int | int) > 0 else 'No proxy expected' }}"
+              - "Full host.get response: {{ _hostget2.json.result[0] | to_nice_json }}"
+
+        - name: Current host facts
+          when: _hostid is defined
+          set_fact:
+            _cur_tags: "{{ _hostget2.json.result[0].tags | default([]) }}"
+            _cur_ifaces: "{{ _hostget2.json.result[0].interfaces | default([]) }}"
+
+        - name: Ensure primary interface matches desired
+          when: _hostid is defined
+          vars:
+            _match: "{{ _cur_ifaces | selectattr('main','equalto','1') | selectattr('type','equalto', (_iface_type | int)) | selectattr('ip','equalto', _iface_ip) | list }}"
+          block:
+            - name: Delete all existing interfaces if they don’t match
+              when: _match | length == 0 and _cur_ifaces | length > 0
+              uri:
+                url: "{{ zbx_api }}"
+                method: POST
+                headers: { Content-Type: "application/json-rpc" }
+                body_format: json
+                validate_certs: "{{ zbx_verify }}"
+                body:
+                  jsonrpc: "2.0"
+                  method: "hostinterface.delete"
+                  id: 6
+                  auth: "{{ _auth }}"
+                  params: "{{ _cur_ifaces | map(attribute='interfaceid') | list }}"
+
+            - name: Create desired primary interface (if needed)
+              when: _match | length == 0
+              uri:
+                url: "{{ zbx_api }}"
+                method: POST
+                headers: { Content-Type: "application/json-rpc" }
+                body_format: json
+                validate_certs: "{{ zbx_verify }}"
+                body:
+                  jsonrpc: "2.0"
+                  method: "hostinterface.create"
+                  id: 7
+                  auth: "{{ _auth }}"
+                  params:
+                    hostid: "{{ _hostid }}"
+                    main: 1
+                    type: "{{ _iface_type | int }}"
+                    useip: 1
+                    ip: "{{ _iface_ip }}"
+                    dns: ""
+                    port: "{{ _iface_default_ports[_iface_type] | default('10050') }}"
+                    details: "{{ _iface_details | default(omit) }}"
+
+        # Success write-back
+        - name: Get device ID from NetBox
+          when: not (hostvars[inventory_hostname].is_virtual | default(false))
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/dcim/devices/?name={{ inventory_hostname }}"
+            method: GET
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Accept: "application/json"
+            return_content: true
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+          register: device_lookup
+
+        - name: Get current device custom fields
+          when: not (hostvars[inventory_hostname].is_virtual | default(false)) and device_lookup.json.results | length > 0
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/dcim/devices/{{ device_lookup.json.results[0].id }}/"
+            method: GET
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Accept: "application/json"
+            return_content: true
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+          register: device_current
+
+
+        - name: Success writeback → NetBox via API (Device)
+          when: not (hostvars[inventory_hostname].is_virtual | default(false)) and device_lookup.json.results | length > 0
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/dcim/devices/{{ device_lookup.json.results[0].id }}/"
+            method: PATCH
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
+              custom_fields: >-
+                {{
+                  (device_current.json.custom_fields | default({}))
+                  | dict2items
+                  | selectattr('key', 'in', ['zbp_status', 'zbp_last_sync', 'zbp_sync_hint', 'zbp_vname', 'zbp_int_ip', 'zbp_pri_template_name_id', 'zbp_pri_template_int_id', 'zbp_proxy_id', 'zbp_group_id', 'zbp_sla_code', 'zbp_platform', 'zbp_site', 'zb_extra_templates', 'zb_mon_env', 'mon_req', 'asset_name'])
+                  | items2dict
+                  | combine({
+                    'zbp_status': 'Synced',
+                    'zbp_last_sync': ansible_date_time.iso8601,
+                    'zbp_sync_hint': ''
+                  }, recursive=True)
+                }}
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+
+        - name: Get VM ID from NetBox
+          when: hostvars[inventory_hostname].is_virtual | default(false)
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/virtualization/virtual-machines/?name={{ inventory_hostname }}"
+            method: GET
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Accept: "application/json"
+            return_content: true
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+          register: vm_lookup
+
+        - name: Get current VM custom fields
+          when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup.json.results | length > 0
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/virtualization/virtual-machines/{{ vm_lookup.json.results[0].id }}/"
+            method: GET
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Accept: "application/json"
+            return_content: true
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+          register: vm_current
+
+        - name: Success writeback → NetBox via API (VM)
+          when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup.json.results | length > 0
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/virtualization/virtual-machines/{{ vm_lookup.json.results[0].id }}/"
+            method: PATCH
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
+              custom_fields: >-
+                {{
+                  (vm_current.json.custom_fields | default({}))
+                  | dict2items
+                  | selectattr('key', 'in', ['zbp_status', 'zbp_last_sync', 'zbp_sync_hint', 'zbp_vname', 'zbp_int_ip', 'zbp_pri_template_name_id', 'zbp_pri_template_int_id', 'zbp_proxy_id', 'zbp_group_id', 'zbp_sla_code', 'zbp_platform', 'zbp_site', 'zb_extra_templates', 'zb_mon_env', 'mon_req', 'asset_name'])
+                  | items2dict
+                  | combine({
+                    'zbp_status': 'Synced',
+                    'zbp_last_sync': ansible_date_time.iso8601,
+                    'zbp_sync_hint': ''
+                  }, recursive=True)
+                }}
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+
+      rescue:
+        - name: Capture error
+          set_fact:
+            _sync_err: "{{ (ansible_failed_result.msg | default(ansible_failed_task.name | default('Zabbix sync failed'))) }}"
+
+        - name: Get device ID from NetBox (failure)
+          when: not (hostvars[inventory_hostname].is_virtual | default(false))
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/dcim/devices/?name={{ inventory_hostname }}"
+            method: GET
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Accept: "application/json"
+            return_content: true
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+          register: device_lookup_fail
+
+        - name: Get current device custom fields (failure)
+          when: not (hostvars[inventory_hostname].is_virtual | default(false)) and device_lookup_fail.json.results | length > 0
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/dcim/devices/{{ device_lookup_fail.json.results[0].id }}/"
+            method: GET
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Accept: "application/json"
+            return_content: true
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+          register: device_current_fail
+
+        - name: Failure writeback → NetBox via API (Device)
+          when: not (hostvars[inventory_hostname].is_virtual | default(false)) and device_lookup_fail.json.results | length > 0
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/dcim/devices/{{ device_lookup_fail.json.results[0].id }}/"
+            method: PATCH
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
+              custom_fields: >-
+                {{
+                  (device_current_fail.json.custom_fields | default({}))
+                  | dict2items
+                  | selectattr('key', 'in', ['zbp_status', 'zbp_last_sync', 'zbp_sync_hint', 'zbp_vname', 'zbp_int_ip', 'zbp_pri_template_name_id', 'zbp_pri_template_int_id', 'zbp_proxy_id', 'zbp_group_id', 'zbp_sla_code', 'zbp_platform', 'zbp_site', 'zb_extra_templates', 'zb_mon_env', 'mon_req', 'asset_name'])
+                  | items2dict
+                  | combine({
+                    'zbp_status': 'Not Synced',
+                    'zbp_sync_hint': _sync_err
+                  }, recursive=True)
+                }}
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+
+        - name: Get VM ID from NetBox (failure)
+          when: hostvars[inventory_hostname].is_virtual | default(false)
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/virtualization/virtual-machines/?name={{ inventory_hostname }}"
+            method: GET
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Accept: "application/json"
+            return_content: true
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+          register: vm_lookup_fail
+
+        - name: Get current VM custom fields (failure)
+          when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup_fail.json.results | length > 0
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/virtualization/virtual-machines/{{ vm_lookup_fail.json.results[0].id }}/"
+            method: GET
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Accept: "application/json"
+            return_content: true
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+          register: vm_current_fail
+
+        - name: Failure writeback → NetBox via API (VM)
+          when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup_fail.json.results | length > 0
+          delegate_to: localhost
+          uri:
+            url: "{{ nb_api_root }}/virtualization/virtual-machines/{{ vm_lookup_fail.json.results[0].id }}/"
+            method: PATCH
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
+              custom_fields: >-
+                {{
+                  (vm_current_fail.json.custom_fields | default({}))
+                  | dict2items
+                  | selectattr('key', 'in', ['zbp_status', 'zbp_last_sync', 'zbp_sync_hint', 'zbp_vname', 'zbp_int_ip', 'zbp_pri_template_name_id', 'zbp_pri_template_int_id', 'zbp_proxy_id', 'zbp_group_id', 'zbp_sla_code', 'zbp_platform', 'zbp_site', 'zb_extra_templates', 'zb_mon_env', 'mon_req', 'asset_name'])
+                  | items2dict
+                  | combine({
+                    'zbp_status': 'Not Synced',
+                    'zbp_sync_hint': _sync_err
+                  }, recursive=True)
+                }}
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
+
+
