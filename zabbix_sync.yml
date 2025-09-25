@@ -669,18 +669,17 @@
         - name: Success writeback → NetBox via API (Device)
           when: not (hostvars[inventory_hostname].is_virtual | default(false)) and device_lookup.json.results | length > 0
           delegate_to: localhost
-          uri:
-            url: "{{ nb_base }}/api/plugins/netbox-zabbix/update-status/"
-            method: POST
-            headers:
-              Authorization: "Token {{ nb_token }}"
-              Content-Type: "application/json"
-            body_format: json
-            body:
-              device_id: "{{ device_lookup.json.results[0].id }}"
-              status: "Synced"
-            status_code: 200
+          netbox.netbox.netbox_device:
+            netbox_url: "{{ nb_base }}"
+            netbox_token: "{{ nb_token }}"
             validate_certs: "{{ nb_verify }}"
+            data:
+              name: "{{ inventory_hostname }}"
+              custom_fields:
+                zbp_status: "Synced"
+                zbp_last_sync: "{{ ansible_date_time.iso8601 }}"
+                zbp_sync_hint: ""
+            state: present
 
         - name: Get VM ID from NetBox
           when: hostvars[inventory_hostname].is_virtual | default(false)
@@ -699,18 +698,17 @@
         - name: Success writeback → NetBox via API (VM)
           when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup.json.results | length > 0
           delegate_to: localhost
-          uri:
-            url: "{{ nb_base }}/api/plugins/netbox-zabbix/update-status/"
-            method: POST
-            headers:
-              Authorization: "Token {{ nb_token }}"
-              Content-Type: "application/json"
-            body_format: json
-            body:
-              vm_id: "{{ vm_lookup.json.results[0].id }}"
-              status: "Synced"
-            status_code: 200
+          netbox.netbox.netbox_virtual_machine:
+            netbox_url: "{{ nb_base }}"
+            netbox_token: "{{ nb_token }}"
             validate_certs: "{{ nb_verify }}"
+            data:
+              name: "{{ inventory_hostname }}"
+              custom_fields:
+                zbp_status: "Synced"
+                zbp_last_sync: "{{ ansible_date_time.iso8601 }}"
+                zbp_sync_hint: ""
+            state: present
 
       rescue:
         - name: Capture error
