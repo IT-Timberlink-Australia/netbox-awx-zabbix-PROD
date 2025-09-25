@@ -669,17 +669,20 @@
         - name: Success writeback → NetBox via API (Device)
           when: not (hostvars[inventory_hostname].is_virtual | default(false)) and device_lookup.json.results | length > 0
           delegate_to: localhost
-          netbox.netbox.netbox_device:
-            netbox_url: "{{ nb_base }}"
-            netbox_token: "{{ nb_token }}"
-            validate_certs: "{{ nb_verify }}"
-            data:
-              name: "{{ inventory_hostname }}"
+          uri:
+            url: "{{ nb_api_root }}/dcim/devices/{{ device_lookup.json.results[0].id }}/"
+            method: PATCH
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
               custom_fields:
                 zbp_status: "Synced"
                 zbp_last_sync: "{{ ansible_date_time.iso8601 }}"
                 zbp_sync_hint: ""
-            state: present
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
 
         - name: Get VM ID from NetBox
           when: hostvars[inventory_hostname].is_virtual | default(false)
@@ -698,17 +701,20 @@
         - name: Success writeback → NetBox via API (VM)
           when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup.json.results | length > 0
           delegate_to: localhost
-          netbox.netbox.netbox_virtual_machine:
-            netbox_url: "{{ nb_base }}"
-            netbox_token: "{{ nb_token }}"
-            validate_certs: "{{ nb_verify }}"
-            data:
-              name: "{{ inventory_hostname }}"
+          uri:
+            url: "{{ nb_api_root }}/virtualization/virtual-machines/{{ vm_lookup.json.results[0].id }}/"
+            method: PATCH
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
               custom_fields:
                 zbp_status: "Synced"
                 zbp_last_sync: "{{ ansible_date_time.iso8601 }}"
                 zbp_sync_hint: ""
-            state: present
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
 
       rescue:
         - name: Capture error
@@ -732,16 +738,19 @@
         - name: Failure writeback → NetBox via API (Device)
           when: not (hostvars[inventory_hostname].is_virtual | default(false)) and device_lookup_fail.json.results | length > 0
           delegate_to: localhost
-          netbox.netbox.netbox_device:
-            netbox_url: "{{ nb_base }}"
-            netbox_token: "{{ nb_token }}"
-            validate_certs: "{{ nb_verify }}"
-            data:
-              name: "{{ inventory_hostname }}"
+          uri:
+            url: "{{ nb_api_root }}/dcim/devices/{{ device_lookup_fail.json.results[0].id }}/"
+            method: PATCH
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
               custom_fields:
                 zbp_status: "Not Synced"
                 zbp_sync_hint: "{{ _sync_err }}"
-            state: present
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
 
         - name: Get VM ID from NetBox (failure)
           when: hostvars[inventory_hostname].is_virtual | default(false)
@@ -760,14 +769,17 @@
         - name: Failure writeback → NetBox via API (VM)
           when: hostvars[inventory_hostname].is_virtual | default(false) and vm_lookup_fail.json.results | length > 0
           delegate_to: localhost
-          netbox.netbox.netbox_virtual_machine:
-            netbox_url: "{{ nb_base }}"
-            netbox_token: "{{ nb_token }}"
-            validate_certs: "{{ nb_verify }}"
-            data:
-              name: "{{ inventory_hostname }}"
+          uri:
+            url: "{{ nb_api_root }}/virtualization/virtual-machines/{{ vm_lookup_fail.json.results[0].id }}/"
+            method: PATCH
+            headers:
+              Authorization: "Token {{ nb_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
               custom_fields:
                 zbp_status: "Not Synced"
                 zbp_sync_hint: "{{ _sync_err }}"
-            state: present
+            status_code: 200
+            validate_certs: "{{ nb_verify }}"
 
