@@ -695,6 +695,9 @@
               custom_fields: >-
                 {{
                   (device_current.json.custom_fields | default({}))
+                  | dict2items
+                  | selectattr('key', 'in', ['zbp_status', 'zbp_last_sync', 'zbp_sync_hint', 'zbp_vname', 'zbp_int_ip', 'zbp_pri_template_name_id', 'zbp_pri_template_int_id', 'zbp_proxy_id', 'zbp_group_id', 'zbp_sla_code', 'zbp_platform', 'zbp_site', 'zb_extra_templates', 'zb_mon_env', 'mon_req', 'asset_name'])
+                  | items2dict
                   | combine({
                     'zbp_status': 'Synced',
                     'zbp_last_sync': ansible_date_time.iso8601,
@@ -746,6 +749,9 @@
               custom_fields: >-
                 {{
                   (vm_current.json.custom_fields | default({}))
+                  | dict2items
+                  | selectattr('key', 'in', ['zbp_status', 'zbp_last_sync', 'zbp_sync_hint', 'zbp_vname', 'zbp_int_ip', 'zbp_pri_template_name_id', 'zbp_pri_template_int_id', 'zbp_proxy_id', 'zbp_group_id', 'zbp_sla_code', 'zbp_platform', 'zbp_site', 'zb_extra_templates', 'zb_mon_env', 'mon_req', 'asset_name'])
+                  | items2dict
                   | combine({
                     'zbp_status': 'Synced',
                     'zbp_last_sync': ansible_date_time.iso8601,
@@ -802,6 +808,9 @@
               custom_fields: >-
                 {{
                   (device_current_fail.json.custom_fields | default({}))
+                  | dict2items
+                  | selectattr('key', 'in', ['zbp_status', 'zbp_last_sync', 'zbp_sync_hint', 'zbp_vname', 'zbp_int_ip', 'zbp_pri_template_name_id', 'zbp_pri_template_int_id', 'zbp_proxy_id', 'zbp_group_id', 'zbp_sla_code', 'zbp_platform', 'zbp_site', 'zb_extra_templates', 'zb_mon_env', 'mon_req', 'asset_name'])
+                  | items2dict
                   | combine({
                     'zbp_status': 'Not Synced',
                     'zbp_sync_hint': _sync_err
@@ -852,6 +861,9 @@
               custom_fields: >-
                 {{
                   (vm_current_fail.json.custom_fields | default({}))
+                  | dict2items
+                  | selectattr('key', 'in', ['zbp_status', 'zbp_last_sync', 'zbp_sync_hint', 'zbp_vname', 'zbp_int_ip', 'zbp_pri_template_name_id', 'zbp_pri_template_int_id', 'zbp_proxy_id', 'zbp_group_id', 'zbp_sla_code', 'zbp_platform', 'zbp_site', 'zb_extra_templates', 'zb_mon_env', 'mon_req', 'asset_name'])
+                  | items2dict
                   | combine({
                     'zbp_status': 'Not Synced',
                     'zbp_sync_hint': _sync_err
